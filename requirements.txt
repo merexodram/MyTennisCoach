@@ -2,9 +2,10 @@
 #   https://pytorch.org/get-started/locally/
 # scripts/setup_windows.ps1 does this for you.
 ultralytics>=8.2
+lap>=0.5
 opencv-python>=4.8
 numpy>=1.24
-pandas>=2.0
+pandas>=2.2.3,<3   # upstream ball-hit detection breaks under pandas 3 copy-on-write
 scipy>=1.11
 matplotlib>=3.7
 tqdm>=4.66
