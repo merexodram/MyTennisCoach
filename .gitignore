@@ -24,3 +24,5 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+prereq_report.txt
+_to_delete/
