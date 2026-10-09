@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS shots (
     speed_kmh    DOUBLE,                    -- estimate from a single camera; treat as relative
     direction    VARCHAR,                   -- 'cross' | 'line' | 'middle'
     depth        VARCHAR,                   -- 'short' | 'mid' | 'deep'
-    outcome      VARCHAR,                   -- 'in_play' | 'winner' | 'error_net' | 'error_long' | 'error_wide'
+    outcome      VARCHAR,                   -- 'in_play' | 'winner' | 'fault' | 'error_net' | 'error_long' | 'error_wide'
     confidence   DOUBLE                     -- 0..1, how sure the pipeline is about this row
 );
 
