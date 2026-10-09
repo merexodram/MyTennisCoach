@@ -1,0 +1,26 @@
+# Footage, weights and databases never go to GitHub
+data/
+models/
+outputs/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.pt
+*.pth
+*.pkl
+*.duckdb
+*.duckdb.wal
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+runs/
+
+# OS / editors
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
