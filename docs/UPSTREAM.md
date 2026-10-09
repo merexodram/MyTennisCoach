@@ -20,7 +20,7 @@ code into another project or redistribute modified versions.
 
 That is why this project:
 
-- references the upstreams as submodules instead of copying files,
+- references the upstreams (through forks) as submodules instead of copying files,
 - wraps and calls upstream code rather than editing it in place,
 - writes its own modules in `src/mytenniscoach/` for anything that needs to
   behave differently.
@@ -42,27 +42,22 @@ committed.
 - TrackNet tennis ball dataset: 19,835 labelled frames from 10 broadcast videos (linked in the TrackNet README)
 - TennisCourtDetector dataset: 8,841 images with 14 keypoints (linked in its README)
 
-## Using your own forks
+## Forks
 
-Forking keeps a copy under your account in case an upstream disappears, and
-gives you a place for changes.
+Each upstream is forked under `merexodram` (2026-10-09), and the submodules
+point at the forks. The forks keep a copy in case an upstream disappears and
+are the place for any changes to upstream code. GitHub shows "forked from ..."
+on each, which is the attribution.
 
-1. On each upstream page above, press **Fork** (owner: `merexodram`, keep the name).
-2. Point the submodules at the forks:
+| Fork | Forked from |
+|---|---|
+| https://github.com/merexodram/tennis_analysis | abdullahtarek/tennis_analysis |
+| https://github.com/merexodram/TrackNet | yastrebksv/TrackNet |
+| https://github.com/merexodram/TennisCourtDetector | yastrebksv/TennisCourtDetector |
+| https://github.com/merexodram/SwingForge | SinbadSails/SwingForge |
 
-```powershell
-git submodule set-url third_party/tennis_analysis      https://github.com/merexodram/tennis_analysis.git
-git submodule set-url third_party/TrackNet             https://github.com/merexodram/TrackNet.git
-git submodule set-url third_party/TennisCourtDetector  https://github.com/merexodram/TennisCourtDetector.git
-git submodule set-url third_party/SwingForge           https://github.com/merexodram/SwingForge.git
-git submodule sync
-git add .gitmodules
-git commit -m "Point submodules at own forks"
-git push
-```
-
-A fork shows "forked from ..." on GitHub, which is the proper attribution. Keep
-the upstream link in the table above as well.
+To pull in later upstream changes, use **Sync fork** on the fork's GitHub page,
+then update the pinned commit here with `git submodule update --remote <path>`.
 
 ## Papers
 

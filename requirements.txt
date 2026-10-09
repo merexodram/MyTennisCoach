@@ -3,7 +3,6 @@
 # scripts/setup_windows.ps1 does this for you.
 ultralytics>=8.2
 opencv-python>=4.8
-mediapipe>=0.10
 numpy>=1.24
 pandas>=2.0
 scipy>=1.11

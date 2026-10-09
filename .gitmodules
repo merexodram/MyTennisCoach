@@ -1,16 +1,16 @@
 [submodule "third_party/tennis_analysis"]
 	path = third_party/tennis_analysis
-	url = https://github.com/abdullahtarek/tennis_analysis.git
+	url = https://github.com/merexodram/tennis_analysis.git
 	shallow = true
 [submodule "third_party/TrackNet"]
 	path = third_party/TrackNet
-	url = https://github.com/yastrebksv/TrackNet.git
+	url = https://github.com/merexodram/TrackNet.git
 	shallow = true
 [submodule "third_party/TennisCourtDetector"]
 	path = third_party/TennisCourtDetector
-	url = https://github.com/yastrebksv/TennisCourtDetector.git
+	url = https://github.com/merexodram/TennisCourtDetector.git
 	shallow = true
 [submodule "third_party/SwingForge"]
 	path = third_party/SwingForge
-	url = https://github.com/SinbadSails/SwingForge.git
+	url = https://github.com/merexodram/SwingForge.git
 	shallow = true

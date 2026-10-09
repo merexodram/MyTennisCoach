@@ -33,10 +33,10 @@ existing open-source tracker on a test clip. No own analysis code yet.
 
 ## Built on other people's work
 
-This project stands on four upstream repositories. They are referenced as git
-submodules pinned to exact commits under `third_party/`; none of their code is
-copied into this repository. Details, licence status and how to switch the
-submodules to your own forks are in [docs/UPSTREAM.md](docs/UPSTREAM.md).
+This project stands on four upstream repositories. Each is forked under
+`merexodram` and referenced as a git submodule pinned to an exact commit under
+`third_party/`; none of their code is copied into this repository. Details and
+licence status are in [docs/UPSTREAM.md](docs/UPSTREAM.md).
 
 | Upstream | Author | Used for |
 |---|---|---|

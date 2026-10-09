@@ -6,7 +6,7 @@
 |---|---|---|
 | NVIDIA driver | current | GeForce Experience or nvidia.com. Check with `nvidia-smi` |
 | Git | any recent | `winget install Git.Git` |
-| Python | 3.11 | `winget install Python.Python.3.11` |
+| Python | 3.11 to 3.13 | `winget install Python.Python.3.13` |
 | ffmpeg | any recent | `winget install Gyan.FFmpeg` |
 
 Open a new PowerShell window after installing so PATH is refreshed.
@@ -35,7 +35,8 @@ creates `data\tennis.duckdb`.
 
 Options:
 
-- `-Cuda cu124` for newer drivers, `-Cuda cpu` for a machine without an NVIDIA GPU.
+- Default is `-Cuda cu118`, which works with NVIDIA drivers from 2023 onward.
+  `-Cuda cu124` needs a current driver, `-Cuda cpu` is for a machine without an NVIDIA GPU.
 
 The last line printed should be `CUDA available: True`.
 
@@ -55,3 +56,18 @@ cd F:\MyTennisCoach
 | Weights | about 0.5 GB |
 | A 30 s test clip at 720p | about 10 MB |
 | One hour of 4K/60 action-cam footage | 25 to 50 GB before trimming |
+
+## Reference machine (checked 2026-10-09)
+
+| Item | Value | Consequence |
+|---|---|---|
+| GPU | laptop GPU with 4 GB | Enough for 30 s test clips; too small and slow for full matches or training |
+| Driver | older driver (CUDA 12.0) | Use the `cu118` PyTorch build, or update the driver |
+| CPU / RAM | laptop CPU and RAM | Fine |
+| Python | 3.13 | Supported by PyTorch; MediaPipe support is checked by the setup script |
+| Git | 2.35 | Fine |
+| ffmpeg | missing | `winget install Gyan.FFmpeg` |
+| Free disk on F: | about 270 GB | Fine |
+
+For Phase 1 and later (full matches, fine-tuning), plan on a free Google Colab
+or Kaggle GPU for the heavy vision step, with this laptop for everything else.
