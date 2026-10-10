@@ -5,9 +5,12 @@ pipeline turns footage into shot-by-shot data, a small database keeps the
 numbers so the video itself can be deleted, and an AI coach reads the data plus
 a few key frames to review technique, tactics and progress over time.
 
-**Status: Phase 0, validation.** The repository currently contains the project
-skeleton, the database schema, setup scripts and a wrapper that runs an
-existing open-source tracker on a test clip. No own analysis code yet.
+**Status: Phase 1, first working pipeline.** A video goes in; court, ball and
+both players are tracked; hits and bounces are detected; rallies and shots are
+written to the database; an annotated video comes out. Tested on four 20 s
+broadcast clips at 480p. Tracking is solid, event detection is a first version
+(see [docs/PIPELINE.md](docs/PIPELINE.md) for what to trust). Not yet tested on
+own-camera footage or on a GPU.
 
 ## How it works
 
@@ -27,7 +30,7 @@ existing open-source tracker on a test clip. No own analysis code yet.
 | Ball | Ball trajectory and bounce detection | TrackNet |
 | Players | Detection and tracking | YOLOv8 (ultralytics) |
 | Pose | 33 body keypoints, joint angles, swing phases | MediaPipe, SwingForge |
-| Events | Hits, stroke type, placement, points | this repository (planned) |
+| Events | Hits, bounces, placement, rallies | this repository (`events.py`), first version |
 | Storage | One DuckDB file, schema in `src/mytenniscoach/schema.sql` | this repository |
 | Coach | Review written from statistics and key frames | this repository (planned) |
 
@@ -57,15 +60,18 @@ cd F:\MyTennisCoach
 powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
 ```
 
-Then follow [docs/VALIDATION.md](docs/VALIDATION.md) to run the first test clip.
+Or simply double-click `setup.bat`. Afterwards, drag a video onto `analyze.bat`
+to process it, and see [docs/PIPELINE.md](docs/PIPELINE.md) for options and
+`scripts/report.py` for statistics.
 Full prerequisites are in [docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md).
 
 ## Repository layout
 
 ```
 docs/            setup, validation protocol, upstream credits
-scripts/         setup, weights download, clip fetch, baseline run, database init
-src/mytenniscoach/   own code; currently the database schema
+scripts/         setup, weights download, clip fetch, statistics report, baseline run
+setup.bat        one-click install         analyze.bat   drag a video onto it
+src/mytenniscoach/   the pipeline: court, ball, players, events, db, render, process
 third_party/     upstream repositories as pinned submodules
 data/            footage, clips and tennis.duckdb   (local only, git-ignored)
 models/          pretrained weights                 (local only, git-ignored)
@@ -77,7 +83,7 @@ outputs/         annotated videos                   (local only, git-ignored)
 | Phase | Goal | Done when |
 |---|---|---|
 | 0 Validation | Run upstream models on professional broadcast clips | Tracking quality judged good enough to continue ([criteria](docs/VALIDATION.md)) |
-| 1 Tracking | Own pipeline: court + TrackNet ball + players, streaming (no full video in RAM), results written to the database | A full match processes unattended and fills `sessions` and `shots` |
+| 1 Tracking | Own pipeline: court + TrackNet ball + players, streaming (no full video in RAM), results written to the database | A full match processes unattended and fills `sessions` and `shots`. **In progress: works on clips; full match and GPU run still to do** |
 | 2 Technique | Pose, stroke classification, per-stroke metrics, clip retention | `pose_metrics` filled; raw video can be deleted |
 | 3 Coach | Session review and monthly trend review | Review generated from the database after each session |
 | 4 Match logic | Points, score, forced and unforced errors, opponent patterns | `points` filled automatically |
