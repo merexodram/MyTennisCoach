@@ -28,7 +28,7 @@ reference technique for comparison.
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python scripts\fetch_video.py "<video url>" --name federer_hard_01 --start 00:12:30 --end 00:13:05
+python scripts\fetch_video.py "<video url>" --name federer_hard_01 --start 00:12:30 --end 00:13:05   # or download.bat for whole videos
 python scripts\run_baseline.py data\raw\federer_hard_01.mp4
 ```
 

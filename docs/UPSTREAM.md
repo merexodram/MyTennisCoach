@@ -31,6 +31,13 @@ that component with a permissively licensed one. A candidate for the ball
 tracker is [qaz812345/TrackNetV3](https://github.com/qaz812345/TrackNetV3)
 (MIT). It is trained on badminton, so it would need retraining on tennis data.
 
+## Video download
+
+Videos are downloaded with [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+(Unlicense, public domain). It is installed as a Python package and updated on
+every `download.bat` run, because video sites change often; it is not forked
+or copied here. See `scripts/fetch_video.py`.
+
 ## Pretrained weights
 
 `scripts/download_weights.py` downloads weights from the Google Drive links the

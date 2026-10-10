@@ -60,7 +60,8 @@ cd F:\MyTennisCoach
 powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
 ```
 
-Or simply double-click `setup.bat`. Afterwards, drag a video onto `analyze.bat`
+Or simply double-click `setup.bat`. To get footage, put video links in
+`data\links.txt` and double-click `download.bat`. Then drag a video onto `analyze.bat`
 to process it, and see [docs/PIPELINE.md](docs/PIPELINE.md) for options and
 `scripts/report.py` for statistics.
 Full prerequisites are in [docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md).
@@ -71,6 +72,7 @@ Full prerequisites are in [docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md).
 docs/            setup, validation protocol, upstream credits
 scripts/         setup, weights download, clip fetch, statistics report, baseline run
 setup.bat        one-click install         analyze.bat   drag a video onto it
+download.bat     download the links in data\links.txt (yt-dlp, up to 1080p)
 src/mytenniscoach/   the pipeline: court, ball, players, events, db, render, process
 third_party/     upstream repositories as pinned submodules
 data/            footage, clips and tennis.duckdb   (local only, git-ignored)
