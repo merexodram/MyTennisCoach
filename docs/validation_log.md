@@ -46,3 +46,27 @@ Next for events: use the hit player's position to time far-side contacts, fit
 a ballistic arc between hits to place the bounce instead of looking for a
 kink, and label one full game by hand to measure hit and bounce accuracy
 instead of judging by eye.
+
+## Event logic, second version (2026-10-10, morning)
+
+First run on the 4 GB laptop GPU: 0.31 s per frame for clip 02 (about 20 times the
+CPU speed), same tracking quality.
+
+Changes: contact time is moved from the direction reversal to the frame where
+the ball is closest to the player; a longer blind spell is allowed around the
+far player; a stall just before contact no longer hides the hit; bounces are
+found by fitting two arcs to the ball's image path instead of looking for one
+kink.
+
+Clip 02, rally of serve plus six strokes counted by eye:
+
+| | Version 1 | Version 2 |
+|---|---|---|
+| Hits found in the rally | 6 of 7 | 7 of 7, alternating near and far correctly |
+| Bounces located | 5 | 6 |
+
+Near-side bounces now land where the near player then hits the ball, which is
+a useful self-check. Far-side bounces are still doubtful (the serve bounce is
+placed at the net), and far-side serve speeds are still far too low. The last
+shot of the clip ends at the net and is labelled a winner; it should be a net
+error.

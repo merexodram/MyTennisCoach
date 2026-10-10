@@ -45,7 +45,7 @@ def _vy(y: np.ndarray, half: int = 2) -> np.ndarray:
     return v
 
 
-def _runs(v: np.ndarray, min_speed: float, min_len: int = 3, bridge: int = 3) -> list[dict]:
+def _runs(v: np.ndarray, min_speed: float, min_len: int = 3, bridge: int = 3, merge_gap: int = 10) -> list[dict]:
     """Stretches where the ball keeps moving down the screen (+1) or up it (-1)."""
     runs: list[dict] = []
     for i, val in enumerate(v):
@@ -57,7 +57,15 @@ def _runs(v: np.ndarray, min_speed: float, min_len: int = 3, bridge: int = 3) ->
             runs[-1]["n"] += 1
         else:
             runs.append({"sign": sign, "start": i, "end": i, "n": 1})
-    return [r for r in runs if r["n"] >= min_len]
+    runs = [r for r in runs if r["n"] >= min_len]
+    merged: list[dict] = []
+    for r in runs:                               # a brief stall does not end a run
+        if merged and merged[-1]["sign"] == r["sign"] and r["start"] - merged[-1]["end"] <= merge_gap:
+            merged[-1]["end"] = r["end"]
+            merged[-1]["n"] += r["n"]
+        else:
+            merged.append(dict(r))
+    return merged
 
 
 def _in_zone(ball_xy, box, reach_x: float, up: float, down: float) -> bool:
@@ -67,6 +75,27 @@ def _in_zone(ball_xy, box, reach_x: float, up: float, down: float) -> bool:
     bh = b[3] - b[1]
     return (b[0] - reach_x * bh <= ball_xy[0] <= b[2] + reach_x * bh
             and b[1] - up * bh <= ball_xy[1] <= b[3] + down * bh)
+
+
+def _contact_frame(ball_px: np.ndarray, players: list[dict], t: int, side: str, fps: float) -> int:
+    """Move a reversal time to the frame where the ball is closest to the player.
+
+    The reversal of the ball's image direction lags the real contact, most of
+    all on the far side, where it shows up only at the top of the ball's arc.
+    """
+    best, best_d = t, 1.0                      # in player heights; beyond that, keep t
+    for g in range(max(0, t - int(fps * 0.6)), min(len(ball_px), t + int(fps * 0.2) + 1)):
+        p = players[g].get(side)
+        if p is None or not np.isfinite(ball_px[g, 0]):
+            continue
+        b = p[0]
+        bh = max(1.0, b[3] - b[1])
+        dx = max(b[0] - ball_px[g, 0], 0.0, ball_px[g, 0] - b[2])
+        dy = max(b[1] - ball_px[g, 1], 0.0, ball_px[g, 1] - b[3])
+        d = float(np.hypot(dx, dy)) / bh
+        if d < best_d - 1e-9:
+            best, best_d = g, d
+    return best
 
 
 def find_hits(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, frame_h: int):
@@ -79,13 +108,15 @@ def find_hits(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, fr
     """
     y = ball_px[:, 1]
     scale = frame_h / 480.0
-    runs = _runs(_vy(y), min_speed=0.6 * scale)
+    runs = _runs(_vy(y), min_speed=0.6 * scale, merge_gap=int(fps * 0.4))
     max_gap = int(fps * 0.9)
     cands: list[tuple[int, str]] = []
     far_bounces: list[int] = []
 
     for r1, r2 in zip(runs[:-1], runs[1:]):
-        if r1["sign"] == r2["sign"] or r2["start"] - r1["end"] > max_gap:
+        # The ball is often lost around the far player, so allow a longer blind spell there.
+        allowed = int(fps * 1.4) if r1["sign"] < 0 else max_gap
+        if r1["sign"] == r2["sign"] or r2["start"] - r1["end"] > allowed:
             continue
         lo, hi = max(0, r1["end"] - 2), min(len(y) - 1, r2["start"] + 2)
         window = np.arange(lo, hi + 1)
@@ -118,6 +149,7 @@ def find_hits(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, fr
             if far and crosses:
                 cands.append((t, "far"))
 
+    cands = [(_contact_frame(ball_px, players, t, side, fps), side) for t, side in cands]
     hits: list[tuple[int, str]] = []
     for t, side in sorted(cands):
         if hits and t - hits[-1][0] < fps * 0.5:
@@ -126,30 +158,53 @@ def find_hits(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, fr
     return hits, far_bounces
 
 
+def _sse(t: np.ndarray, v: np.ndarray, deg: int):
+    deg = min(deg, len(t) - 1)
+    coef = np.polyfit(t, v, deg)
+    coef = np.concatenate([np.zeros(3 - len(coef)), coef])        # always a, b, c
+    return float(((np.polyval(coef, t) - v) ** 2).sum()), coef
+
+
 def find_bounce(ball_px: np.ndarray, Hs: list, start: int, end: int, fps: float,
                 target_sign: float, hints: list[int], scale: float) -> int | None:
     """Where the ball lands between two hits.
 
-    A bounce is a kink in the image path: the ball stops falling on screen.
-    Only points that map into the target half of the court are considered.
+    Before and after the bounce the ball flies on two smooth arcs. Fit the
+    image path with two separate curves (y quadratic, x linear in time) and
+    take the split that explains the path best, provided the ball was falling
+    on screen before it and rising after it, and the point maps into the
+    target half of the court.
     """
-    lo, hi = start + int(fps * 0.16), end - int(fps * 0.08)
-    y = ball_px[:, 1]
-    best, best_k = None, 0.0
-    for i in range(max(lo, 2), min(hi, len(y) - 2)):
-        if not (np.isfinite(y[i - 2]) and np.isfinite(y[i]) and np.isfinite(y[i + 2])) or Hs[i] is None:
-            continue
+    lo, hi = start + int(fps * 0.12), end + 1
+    fr = np.array([i for i in range(max(lo, 0), min(hi, len(ball_px)))
+                   if np.isfinite(ball_px[i, 0]) and Hs[i] is not None])
+    if len(fr) < 8:
+        return None
+    t = fr.astype(float) - fr[0]
+    x, y = ball_px[fr, 0], ball_px[fr, 1]
+    whole = _sse(t, y, 2)[0] + _sse(t, x, 1)[0]
+    # The receiver may take the ball soon after the bounce: allow a short second arc.
+    best, best_sse = None, float("inf")
+    for k in range(4, len(fr) - 2 + 1):
+        sy1, c1 = _sse(t[:k], y[:k], 2)
+        sy2, c2 = _sse(t[k:], y[k:], 2)
+        sse = sy1 + sy2 + _sse(t[:k], x[:k], 1)[0] + _sse(t[k:], x[k:], 1)[0]
+        v_in = 2 * c1[-3] * t[k - 1] + c1[-2]            # image speed just before the split
+        v_out = 2 * c2[-3] * t[k] + c2[-2]               # and just after
+        if v_in - v_out < 0.8 * scale:
+            continue                                     # not a bounce: no upward kick
+        i = int(fr[k - 1] if y[k - 1] >= y[k] else fr[k])   # the lower of the two points
         bx, by = court.to_court(Hs[i], [ball_px[i]])[0]
         depth = by * target_sign
-        if not (0.3 < depth < court.HALF_LENGTH + 4.0 and abs(bx) < court.HALF_DOUBLES + 3.0):
+        if not (0.2 < depth < court.HALF_LENGTH + 5.0 and abs(bx) < court.HALF_DOUBLES + 4.0):
             continue
-        kink = (y[i] - y[i - 2]) / 2.0 - (y[i + 2] - y[i]) / 2.0
         if any(abs(i - h) <= 2 for h in hints):
-            kink += 2.0 * scale                  # agrees with a direction reversal
-        if kink > best_k:
-            best, best_k = i, kink
-    need = (0.8 if target_sign < 0 else 2.0) * scale
-    return best if best_k > need else None
+            sse *= 0.7                                   # agrees with a direction reversal
+        if sse < best_sse:
+            best, best_sse = i, sse
+    if best is None or whole < 1.8 * max(best_sse, 1e-6) or whole < 1.5 * scale * scale * len(fr):
+        return None                                      # one smooth arc explains it: no bounce seen
+    return best
 
 
 def _nearby(players: list[dict], f: int, side: str, reach: int = 6):
