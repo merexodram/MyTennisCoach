@@ -29,30 +29,47 @@ def pick_device(name: str) -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def track(path: Path, device: str, court_every_s: float = 0.2, log=print) -> dict:
-    """One streaming pass: court, ball and players for every frame."""
+def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkpoint: Path | None = None) -> dict:
+    """One streaming pass: court, ball and players for every frame.
+
+    With a checkpoint path, progress is saved every 100 frames and an
+    interrupted run resumes where it stopped.
+    """
     info = video.probe(path)
     step = max(1, int(round(info.fps * court_every_s)))
     cd, bt, pf = court.CourtDetector(device), ball.BallTracker(device), players.PlayerFinder(device)
 
-    Hs, court_err, raw_ball, boxes = [], [], [], []
-    H, err = None, float("inf")
+    tr = {"Hs": [], "court_err": [], "ball": [], "boxes": []}
+    if checkpoint is not None and checkpoint.exists():
+        tr = pickle.loads(checkpoint.read_bytes())
+        log(f"  resuming at frame {len(tr['Hs'])}")
+    done = len(tr["Hs"])
+    H = tr["Hs"][-1] if done else None
+    err = tr["court_err"][-1] if done else float("inf")
     t0 = time.time()
     for i, frame in video.frames(path):
+        if i < done:
+            if i >= done - 2:
+                bt.step(frame)                             # refill the ball net's 3-frame buffer
+            continue
         if i % step == 0:
             kps = cd.keypoints(frame)
             H, n_inl, err = court.fit_homography(kps)
             if H is not None and (n_inl < 8 or err > 5.0):
                 H = None                                   # not the main camera view
-        Hs.append(H)
-        court_err.append(err)
+        tr["Hs"].append(H)
+        tr["court_err"].append(err)
         # Keep feeding the ball net so its 3-frame buffer stays in order.
         b = bt.step(frame)
-        raw_ball.append(b if H is not None else None)
-        boxes.append(pf.people(frame) if H is not None else np.zeros((0, 5), np.float32))
-        if i and i % 50 == 0:
-            log(f"  frame {i}/{info.frames}  {(time.time() - t0) / (i + 1):.2f} s/frame")
-    return {"Hs": Hs, "court_err": court_err, "ball": raw_ball, "boxes": boxes}
+        tr["ball"].append(b if H is not None else None)
+        tr["boxes"].append(pf.people(frame) if H is not None else np.zeros((0, 5), np.float32))
+        if (i + 1) % 50 == 0:
+            log(f"  frame {i + 1}/{info.frames}  {(time.time() - t0) / (i + 1 - done):.2f} s/frame")
+        if checkpoint is not None and (i + 1) % 100 == 0:
+            checkpoint.write_bytes(pickle.dumps(tr))
+    if checkpoint is not None and checkpoint.exists():
+        checkpoint.unlink()
+    return tr
 
 
 def analyse(info: video.VideoInfo, tr: dict, hands: dict):
@@ -109,7 +126,7 @@ def main() -> None:
     else:
         device = pick_device(args.device)
         print(f"Tracking {path.name}: {info.frames} frames, {info.width}x{info.height} @ {info.fps:.0f} fps on {device}")
-        tr = track(path, device)
+        tr = track(path, device, checkpoint=CACHE / f"{path.stem}_partial.pkl")
         cache.write_bytes(pickle.dumps(tr))
 
     hands = {"near": args.near_hand, "far": args.far_hand}
