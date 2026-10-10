@@ -1,6 +1,12 @@
 """Annotated output video: court lines, ball trail, players, events, mini-court."""
 from __future__ import annotations
 
+import glob
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -21,9 +27,36 @@ def _mini(shape, scale=7.0, margin=22):
     return base, to_px
 
 
+def find_ffmpeg() -> str | None:
+    """ffmpeg on PATH, or where winget puts it (PATH is stale until a new login)."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        hits = glob.glob(os.path.join(local, "Microsoft", "WinGet", "Packages", "Gyan.FFmpeg*", "**", "bin", "ffmpeg.exe"),
+                         recursive=True)
+        if hits:
+            return hits[0]
+    return None
+
+
+def to_h264(raw: Path, final: Path) -> bool:
+    """OpenCV writes MPEG-4 Part 2, which Windows players and browsers often
+    refuse. Re-encode to H.264 so the file plays anywhere."""
+    exe = find_ffmpeg()
+    if exe is None:
+        return False
+    cmd = [exe, "-y", "-v", "error", "-i", str(raw), "-c:v", "libx264", "-crf", "21",
+           "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(final)]
+    return subprocess.call(cmd) == 0 and final.exists() and final.stat().st_size > 0
+
+
 def render(path, out_path, info, Hs, ball_px, players, shots):
+    out_path = Path(out_path)
+    raw_path = out_path.with_name(out_path.stem + "_raw.mp4")
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(str(out_path), fourcc, info.fps, (info.width, info.height))
+    out = cv2.VideoWriter(str(raw_path), fourcc, info.fps, (info.width, info.height))
     mini_base, to_mini = _mini((info.height, info.width))
     mh, mw = mini_base.shape[:2]
     hit_at = {s.frame: s for s in shots}
@@ -80,3 +113,9 @@ def render(path, out_path, info, Hs, ball_px, players, shots):
             cv2.putText(frame, label, (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.75, YELLOW, 2, cv2.LINE_AA)
         out.write(frame)
     out.release()
+    if to_h264(raw_path, out_path):
+        raw_path.unlink()
+    else:
+        raw_path.replace(out_path)
+        print("  ffmpeg not found: the video is MPEG-4 Part 2 and may not play in every player. "
+              "VLC plays it; installing ffmpeg fixes it.")
