@@ -61,6 +61,31 @@ that, and a third is up to the camera:
 Hit and bounce detection on the far side from a low camera is still weak: the
 ball's up-and-down movement there is only a few pixels.
 
+## Who is "me", and technique
+
+`calibrate.bat` ends by asking you to click on yourself. The colours of your
+clothes at that moment are the reference; in every rally the near and the far
+player are compared with it, so changing ends is followed. Wear something
+different from your opponent. Without a click, the near player is taken as you.
+`--me near` or `--me far` overrides it.
+
+Only your strokes get technique analysis. Around each one you are cut out of
+the original recording at full resolution, a pose network (YOLOv8-pose, 17
+body points) runs on the cut-out, and these are stored per stroke:
+
+| Measurement | How | Trust |
+|---|---|---|
+| Stroke (forehand, backhand, serve, smash) | which side of the body the hitting hand is on at contact; overhead if well above the shoulders | fair: right on the 4 strokes checked by eye |
+| Contact height, sideways reach | hitting wrist relative to ankles and hips, scaled by your height | fair |
+| Knee bend, elbow angle, trunk lean | angles as they appear in the picture | rough: seen from behind, angles are foreshortened |
+| Shoulder turn, hip-shoulder separation | from how narrow shoulders and hips look | poor: saturates near 90 degrees, to be replaced |
+| Stance | direction of the line through the feet, on the court | fair for the near player |
+| Swing duration | from the hand being almost still to contact | rough, often missing |
+
+`data\player.json` holds your playing hand, backhand type and height so they
+need not be typed. Not built yet: split step, contact point in front of the
+body (not visible from behind), comparison against your own history.
+
 ## What to trust, as of the first clips
 
 | Output | Trust | Why |

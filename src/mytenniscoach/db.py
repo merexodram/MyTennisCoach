@@ -48,8 +48,12 @@ def save_session(con, info, shots, meta: dict) -> int:
          info.fps, info.width, info.height, info.duration_s, str(info.path),
          pipeline_version(), meta.get("notes")],
     )
-    me = meta.get("me_side", "near")
-    who = lambda side: "me" if side == me else "opponent"
+    me_default = meta.get("me_side", "near")
+    me_by_rally = meta.get("me_by_rally", {})
+    technique = meta.get("technique", {})
+
+    def who(side, rally=None):
+        return "me" if side == me_by_rally.get(rally, me_default) else "opponent"
 
     point_ids: dict[int, int] = {}
     for rally in sorted({s.rally for s in shots}):
@@ -59,20 +63,31 @@ def save_session(con, info, shots, meta: dict) -> int:
         last = rs[-1]
         winner, reason = None, None
         if last.outcome == "winner":
-            winner, reason = who(last.hitter), "winner"
+            winner, reason = who(last.hitter, rally), "winner"
         elif last.outcome.startswith("error"):
-            winner = "opponent" if who(last.hitter) == "me" else "me"
+            winner = "opponent" if who(last.hitter, rally) == "me" else "me"
             reason = "unforced_error"            # forced vs unforced needs Phase 4
         last_frame = last.bounce_frame or last.frame
         con.execute("INSERT INTO points VALUES (?,?,?,?,?,?,?,?,?)",
-                    [pid, sid, rally, rs[0].frame, last_frame, who(rs[0].hitter), len(rs), winner, reason])
+                    [pid, sid, rally, rs[0].frame, last_frame, who(rs[0].hitter, rally), len(rs), winner, reason])
 
     for s in shots:
         shid = _next_id(con, "shots", "shot_id")
         c, b = s.contact_xy_m or (None, None), s.bounce_xy_m or (None, None)
         con.execute(
             "INSERT INTO shots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [shid, sid, point_ids[s.rally], s.seq, s.frame, s.frame / info.fps, who(s.hitter), s.stroke,
+            [shid, sid, point_ids[s.rally], s.seq, s.frame, s.frame / info.fps, who(s.hitter, s.rally), s.stroke,
              c[0], c[1], b[0], b[1], s.in_court, s.speed_kmh, s.direction, s.depth, s.outcome, s.confidence],
         )
+        t = technique.get(s.frame)
+        if t is not None and t.pose_frames >= 5:
+            con.execute(
+                """INSERT INTO pose_metrics (shot_id, contact_height_m, contact_front_m, knee_flex_deg,
+                       hip_shoulder_sep_deg, elbow_angle_deg, trunk_tilt_deg, stance, split_step, swing_duration_s,
+                       contact_reach_m, shoulder_turn_deg, off_hand_on_racket, pose_frames)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                [shid, t.contact_height_m, None, t.knee_flex_deg, t.hip_shoulder_sep_deg, t.elbow_angle_deg,
+                 t.trunk_tilt_deg, t.stance, None, t.swing_duration_s, t.contact_reach_m, t.shoulder_turn_deg,
+                 t.off_hand_on_racket, t.pose_frames],
+            )
     return sid

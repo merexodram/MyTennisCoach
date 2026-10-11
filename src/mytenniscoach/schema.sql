@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS pose_metrics (
     swing_duration_s   DOUBLE
 );
 
+-- Added with the technique layer (existing databases are upgraded in place).
+ALTER TABLE pose_metrics ADD COLUMN IF NOT EXISTS contact_reach_m DOUBLE;      -- hitting hand sideways from the hips
+ALTER TABLE pose_metrics ADD COLUMN IF NOT EXISTS shoulder_turn_deg DOUBLE;    -- estimate from apparent shoulder width
+ALTER TABLE pose_metrics ADD COLUMN IF NOT EXISTS off_hand_on_racket BOOLEAN;  -- at contact
+ALTER TABLE pose_metrics ADD COLUMN IF NOT EXISTS pose_frames INTEGER;         -- frames with a usable pose
+
 CREATE TABLE IF NOT EXISTS clips (
     clip_id      INTEGER PRIMARY KEY,
     session_id   INTEGER NOT NULL REFERENCES sessions(session_id),

@@ -70,7 +70,7 @@ def _frames(path, n: int, keep):
     reader.close()
 
 
-def render(path, out_path, info, Hs, ball_px, players, shots, keep=None):
+def render(path, out_path, info, Hs, ball_px, players, shots, keep=None, poses=None):
     out_path = Path(out_path)
     raw_path = out_path.with_name(out_path.stem + "_raw.mp4")
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -93,6 +93,9 @@ def render(path, out_path, info, Hs, ball_px, players, shots, keep=None):
             if p is not None:
                 b = p[0]
                 cv2.rectangle(frame, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), SIDE_COLOR[side], 2)
+        if poses and i in poses:                             # my skeleton around my strokes
+            from . import technique
+            technique.draw(frame, poses[i])
         for k in range(8):                                   # ball trail
             j = i - k
             if j >= 0 and np.isfinite(ball_px[j, 0]):

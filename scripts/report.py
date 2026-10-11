@@ -59,6 +59,20 @@ def main() -> None:
         FROM shots {where}
         GROUP BY ALL ORDER BY hitter, shots DESC""", params)
 
+    print("My technique, by stroke (pose of my strokes only)\n")
+    table(con, f"""
+        SELECT s.stroke, count(*) AS strokes,
+               round(avg(p.contact_height_m), 2) AS contact_height_m,
+               round(avg(p.contact_reach_m), 2) AS reach_m,
+               round(avg(p.knee_flex_deg)) AS knee_deg,
+               round(avg(p.elbow_angle_deg)) AS elbow_deg,
+               round(avg(p.trunk_tilt_deg)) AS trunk_tilt_deg,
+               round(avg(p.swing_duration_s), 2) AS swing_s,
+               mode(p.stance) AS usual_stance
+        FROM pose_metrics p JOIN shots s USING (shot_id)
+        {where.replace('session_id', 's.session_id')}
+        GROUP BY ALL ORDER BY strokes DESC""", params)
+
     if args.session is not None:
         print("Shots\n")
         table(con, f"""

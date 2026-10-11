@@ -152,9 +152,22 @@ def find_calibration(video_path: Path) -> Path | None:
     return None
 
 
-def save_calibration(path: Path, points: dict, size: tuple[int, int]) -> None:
+def save_calibration(path: Path, points: dict, size: tuple[int, int], me: dict | None = None) -> None:
     data = {"size": list(size), "points": {str(k): [float(v[0]), float(v[1])] for k, v in points.items()}}
+    if me is not None:
+        data["me"] = me                              # {"frame": index in the clicked video, "fps": ..., "point": [x, y]}
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def load_me(path: Path, width: int, height: int, fps: float):
+    """The click on "me": (frame index, (x, y)) for a video of the given size and frame rate, or None."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    me = data.get("me")
+    if not me:
+        return None
+    sx, sy = width / data["size"][0], height / data["size"][1]
+    frame = int(round(me["frame"] * fps / me.get("fps", fps)))
+    return frame, (me["point"][0] * sx, me["point"][1] * sy)
 
 
 def load_calibration(path: Path, width: int, height: int):

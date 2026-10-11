@@ -9,13 +9,14 @@ and re-running takes seconds.
 from __future__ import annotations
 
 import argparse
+import json
 import pickle
 import time
 from pathlib import Path
 
 import numpy as np
 
-from . import activity, ball, court, db, events, players, proxy, render, video
+from . import activity, ball, court, db, events, identity, players, proxy, render, technique, video
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "outputs"
@@ -206,7 +207,17 @@ def summary(info, tr, ball_px, chosen, shots) -> dict:
     }
 
 
+def load_player() -> dict:
+    """data/player.json: who "me" is, so it need not be typed every time."""
+    f = ROOT / "data" / "player.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except Exception:
+        return {}
+
+
 def main() -> None:
+    player = load_player()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("video")
     ap.add_argument("--device", default="auto", help="auto | cuda | cpu")
@@ -215,7 +226,16 @@ def main() -> None:
     ap.add_argument("--far-hand", default="right", choices=["right", "left"])
     ap.add_argument("--doubles", action="store_true",
                     help="doubles match: the outer side lines count (default: singles, inner side lines)")
-    ap.add_argument("--me", default="near", choices=["near", "far"], help="which player is analysed as 'me'")
+    ap.add_argument("--me", default="auto", choices=["auto", "near", "far"],
+                    help="which player is 'me': auto = the one clicked in calibrate.bat, found again in every "
+                         "rally by clothing colour (near if nobody was clicked)")
+    ap.add_argument("--hand", default=player.get("hand", "right"), choices=["right", "left"], help="my playing hand")
+    ap.add_argument("--height", type=float, default=player.get("height_cm", 178.0), help="my height in cm (scales the pose)")
+    ap.add_argument("--no-technique", action="store_true", help="skip pose and technique measurements")
+    ap.add_argument("--prepare", action="store_true",
+                    help="only make the working copy and collect what a cloud GPU run needs in outputs/for_colab")
+    ap.add_argument("--track-only", action="store_true",
+                    help="only do the slow tracking pass and save it (for a cloud GPU); analyse later at home")
     ap.add_argument("--kind", default="reference", choices=["match", "training", "reference"])
     ap.add_argument("--source", default="broadcast", choices=["broadcast", "action_cam", "phone"])
     ap.add_argument("--surface", default=None)
@@ -239,10 +259,29 @@ def main() -> None:
 
     original = Path(args.video).resolve()
     CACHE.mkdir(parents=True, exist_ok=True)
-    cache = CACHE / f"{original.stem}_tracks.pkl"
+    # A working copy handed in directly (cloud run) keeps the name of its recording.
+    is_copy = original.stem.endswith("_work")
+    name = original.stem[:-5] if is_copy else original.stem
+    cache = CACHE / f"{name}_tracks.pkl"
     # Work on a 1080p copy when the recording is larger or faster than needed.
-    path = original if args.no_proxy else proxy.make(original, CACHE / f"{original.stem}_work.mp4")
+    path = original if (args.no_proxy or is_copy) else proxy.make(original, CACHE / f"{name}_work.mp4")
     info = video.probe(path)
+    cal = Path(args.court_file) if args.court_file else court.find_calibration(original.with_name(name + original.suffix))
+
+    if args.prepare:
+        import shutil
+        dest = OUT / "for_colab"
+        dest.mkdir(parents=True, exist_ok=True)
+        if path == original and not is_copy:               # small enough already: the recording is its own copy
+            shutil.copyfile(original, dest / f"{name}_work{original.suffix}")
+        else:
+            shutil.copyfile(path, dest / f"{name}_work.mp4")
+        if cal is not None and cal.exists():
+            shutil.copyfile(cal, dest / f"{name}.court.json")
+        else:
+            print("No court file yet: drag the video onto calibrate.bat first if the camera was your own.")
+        print(f"Ready for upload: {dest}")
+        return
 
     if cache.exists() and not args.redo:
         print(f"Using cached tracks: {cache.name}")
@@ -251,17 +290,19 @@ def main() -> None:
         device = pick_device(args.device)
         print(f"Tracking {path.name}: {info.frames} frames, {info.width}x{info.height} @ {info.fps:.0f} fps on {device}")
         fixed_H = None
-        cal = Path(args.court_file) if args.court_file else court.find_calibration(original)
         if cal is not None and cal.exists():
             fixed_H, cal_err = court.load_calibration(cal, info.width, info.height)
             print(f"Court from {cal.name} (fixed camera, fit error {cal_err:.1f} px)")
-        tr = track(path, device, checkpoint=CACHE / f"{original.stem}_partial.pkl",
+        tr = track(path, device, checkpoint=CACHE / f"{name}_partial.pkl",
                    scan=not args.all_frames, court_every_s=args.court_every, fixed_H=fixed_H,
                    far_zoom=args.far_zoom)
         if fixed_H is None and not any(H is not None for H in tr["Hs"]):
             print("The court was not recognised in any frame. For a fixed camera, mark it by hand once:\n"
                   f"  drag the video onto calibrate.bat, then analyse again.")
         cache.write_bytes(pickle.dumps(tr))
+    if args.track_only:
+        print(f"Tracks saved: {cache}")
+        return
 
     hands = {"near": args.near_hand, "far": args.far_hand}
     ball_px, chosen, shots = analyse(info, tr, hands, doubles=args.doubles)
@@ -276,21 +317,67 @@ def main() -> None:
         spd = f"{sh.speed_kmh:.0f} km/h" if sh.speed_kmh else "-"
         print(f"  {sh.frame / info.fps:6.2f}s  rally {sh.rally} #{sh.seq}  {sh.hitter:4s} {sh.stroke:9s} {b:34s} {spd:9s} {sh.outcome}")
 
+    # Which player is me, rally by rally.
+    me_by_rally: dict = {}
+    rallies = sorted({sh.rally for sh in shots})
+    if args.me in ("near", "far"):
+        me_by_rally = {r: args.me for r in rallies}
+    else:
+        click = court.load_me(cal, info.width, info.height, info.fps) if cal is not None and cal.exists() else None
+        if click is None:
+            me_by_rally = {r: "near" for r in rallies}
+            print("Me: the near player (nobody was clicked in calibrate.bat, so ends are not followed)")
+        else:
+            ref = identity.reference(path, tr["boxes"], click[0], click[1])
+            sides = identity.me_sides(path, chosen, shots, ref, info.fps)
+            me_by_rally = {r: v["side"] for r, v in sides.items()}
+            n_far = sum(v == "far" for v in me_by_rally.values())
+            unsure = sum(abs(v["near"] - v["far"]) < 0.1 for v in sides.values())
+            print(f"Me: found by clothing colour; near in {len(me_by_rally) - n_far} rallies, far in {n_far}"
+                  + (f"; {unsure} rallies were a close call" if unsure else ""))
+
+    # Technique: pose of my strokes only.
+    tech: dict = {}
+    if not args.no_technique and shots:
+        mine = tuple(sh.frame for sh in shots if me_by_rally.get(sh.rally) == sh.hitter)
+        pose_cache = CACHE / f"{name}_pose.pkl"
+        if pose_cache.exists() and not args.redo:
+            saved = pickle.loads(pose_cache.read_bytes())
+            if saved.get("frames") == mine and saved.get("hand") == args.hand:
+                tech = saved["tech"]
+        if not tech and mine:
+            source = original if not is_copy else path
+            tech = technique.analyse_strokes(path, source, info, chosen, shots, me_by_rally, tr["Hs"], args.hand,
+                                             args.height / 100.0, pick_device(args.device))
+            pose_cache.write_bytes(pickle.dumps({"frames": mine, "hand": args.hand, "tech": tech}))
+        for sh in shots:                                   # the pose knows the stroke better than the ball does
+            t = tech.get(sh.frame)
+            if t is not None and t.stroke != "unknown":
+                sh.stroke = t.stroke
+        if tech:
+            print(f"Technique: {len(tech)} of my strokes measured")
+            num = lambda v, d=0: "-" if v is None else f"{v:.{d}f}"
+            for f, t in sorted(tech.items()):
+                print(f"  {f / info.fps:6.2f}s  {t.stroke:9s} contact {num(t.contact_height_m, 2)} m high, "
+                      f"{num(t.contact_reach_m, 2)} m out; knee {num(t.knee_flex_deg)} deg, elbow {num(t.elbow_angle_deg)} deg, "
+                      f"shoulder turn {num(t.shoulder_turn_deg)} deg; stance {t.stance or '-'}")
+
     if not args.no_db:
         con = db.connect(args.db)
-        info.path = original                               # the session belongs to the recording, not its copy
+        info.path = original.with_name(name + original.suffix)   # the session belongs to the recording, not its copy
         sid = db.save_session(con, info, shots, {
             "kind": args.kind, "source": args.source, "surface": args.surface, "player": args.player,
-            "opponent": args.opponent, "notes": args.notes, "me_side": args.me,
+            "opponent": args.opponent, "notes": args.notes, "me_by_rally": me_by_rally, "technique": tech,
             "camera_view": "broadcast" if args.source == "broadcast" else "behind_baseline",
         })
         con.close()
         print(f"Saved as session {sid} in {args.db}")
 
     if not args.no_video:
-        out = OUT / f"{original.stem}_annotated.mp4"
+        out = OUT / f"{name}_annotated.mp4"
         keep = None if args.full_video else tr.get("windows")
-        render.render(path, out, info, tr["Hs"], ball_px, chosen, shots, keep=keep)
+        poses = {f: kp for t in tech.values() for f, kp in t.keypoints.items()}
+        render.render(path, out, info, tr["Hs"], ball_px, chosen, shots, keep=keep, poses=poses)
         print(f"Wrote {out}")
 
 

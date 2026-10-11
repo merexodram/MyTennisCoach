@@ -13,6 +13,10 @@ on the real lines.
     U          undo the last point
     N          show another frame of the video (if a player hides a line)
     Enter      save and quit (needs 4 points)
+
+The last thing asked is to click on yourself. Players change ends, so the
+pipeline uses the colours of your clothes to know which player is you in
+every rally. Wear something different from your opponent.
     Esc        quit without saving
 
 The result is saved next to the video as <name>.court.json and used
@@ -30,11 +34,12 @@ sys.path.insert(0, str(ROOT / "src"))
 from mytenniscoach import court, video  # noqa: E402
 
 # Easiest points first: the near half is large on screen.
-ORDER = [2, 3, 5, 7, 10, 11, 13, court.NET_CENTRE, 1, 0, 6, 4, 9, 8, 12]
+ME = "me"
+ORDER = [2, 3, 5, 7, 10, 11, 13, court.NET_CENTRE, 1, 0, 6, 4, 9, 8, 12, ME]
 WINDOW = "MyTennisCoach court calibration"
 
 
-def draw(frame: np.ndarray, points: dict, scale: float) -> np.ndarray:
+def draw(frame: np.ndarray, points: dict, scale: float, me_point=None) -> np.ndarray:
     img = frame.copy()
     H, err = court.fit_points(points)
     if H is not None:
@@ -45,6 +50,8 @@ def draw(frame: np.ndarray, points: dict, scale: float) -> np.ndarray:
         cv2.line(img, tuple(map(int, net[0])), tuple(map(int, net[1])), (255, 0, 255), 2, cv2.LINE_AA)
     for (x, y) in points.values():
         cv2.circle(img, (int(x), int(y)), 6, (0, 0, 255), -1, cv2.LINE_AA)
+    if me_point is not None:
+        cv2.circle(img, (int(me_point[0]), int(me_point[1])), 14, (0, 255, 255), 3, cv2.LINE_AA)
     return cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale != 1 else img
 
 
@@ -59,6 +66,7 @@ def main() -> None:
     scale = min(1.0, 1600 / info.width, 900 / info.height)      # fit the screen
 
     points: dict = {}
+    me = None
     history: list = []
     idx = 0
     clicked: list = []
@@ -67,12 +75,20 @@ def main() -> None:
                          if ev == cv2.EVENT_LBUTTONDOWN else None)
     while True:
         key_name = ORDER[idx] if idx < len(ORDER) else None
-        label = court.POINT_NAMES[key_name] if key_name is not None else "all points done"
+        if key_name == ME:
+            label = "YOURSELF, on your shirt (so the coach knows which player is you)"
+        else:
+            label = court.POINT_NAMES[key_name] if key_name is not None else "all done, press Enter"
         cv2.setWindowTitle(WINDOW, f"Click: {label}   |   S skip, U undo, N other frame, Enter save, Esc quit   "
                                    f"[{len(points)} set]")
-        cv2.imshow(WINDOW, draw(frame, points, scale))
+        cv2.imshow(WINDOW, draw(frame, points, scale, me["point"] if me else None))
         k = cv2.waitKey(30) & 0xFF
-        if clicked and key_name is not None:
+        if clicked and key_name == ME:
+            me = {"frame": int(at), "fps": float(info.fps), "point": [float(v) for v in clicked.pop()]}
+            clicked.clear()
+            history.append(ME)
+            idx += 1
+        elif clicked and key_name is not None:
             points[key_name] = clicked.pop()
             clicked.clear()
             history.append(key_name)
@@ -81,6 +97,8 @@ def main() -> None:
             idx += 1
         elif k in (ord("u"), ord("U")) and history:
             last = history.pop()
+            if last == ME:
+                me = None
             points.pop(last, None)
             idx = ORDER.index(last)
         elif k in (ord("n"), ord("N")):
@@ -90,9 +108,10 @@ def main() -> None:
                 frame = got[0]
         elif k == 13 and len(points) >= 4:
             out = court.calibration_file(path)
-            court.save_calibration(out, points, (info.width, info.height))
+            court.save_calibration(out, points, (info.width, info.height), me)
             H, err = court.fit_points(points)
-            print(f"Saved {out} ({len(points)} points, worst fit error {err:.1f} px)")
+            print(f"Saved {out} ({len(points)} points, worst fit error {err:.1f} px, "
+                  f"{'you are marked' if me else 'you are NOT marked: the near player is taken as you'})")
             break
         elif k == 27:
             print("Nothing saved.")
