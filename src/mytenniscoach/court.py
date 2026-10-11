@@ -39,10 +39,7 @@ class CourtDetector:
         self.device = device
         self.model = upstream.court_net()
         self.model.load_state_dict(torch.load(upstream.weights("court_detector.pt"), map_location=device))
-        self.model.to(device).eval()
-        self.half = device.startswith("cuda")
-        if self.half:
-            self.model.half()
+        self.model.to(device).eval()               # full precision: it only runs a few times a second
 
     @torch.no_grad()
     def keypoints(self, frame: np.ndarray) -> np.ndarray:
@@ -50,9 +47,7 @@ class CourtDetector:
         h, w = frame.shape[:2]
         img = cv2.resize(frame, (NET_W, NET_H)).astype(np.float32) / 255.0
         inp = torch.from_numpy(img.transpose(2, 0, 1)).unsqueeze(0).to(self.device)
-        if self.half:
-            inp = inp.half()
-        heat = torch.sigmoid(self.model(inp)[0]).float().cpu().numpy()
+        heat = torch.sigmoid(self.model(inp)[0]).cpu().numpy()
         pts = np.full((14, 2), np.nan, dtype=np.float32)
         for k in range(14):
             hm = heat[k]

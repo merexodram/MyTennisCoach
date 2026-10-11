@@ -31,9 +31,8 @@ class PlayerFinder:
         """For each frame, an (N, 5) array: x1, y1, x2, y2, confidence per person."""
         if not frames:
             return []
-        extra = {"half": True} if str(self.device).startswith("cuda") else {}
         results = self.model.predict(frames, classes=[0], conf=0.25, imgsz=self.imgsz, device=self.device,
-                                     verbose=False, **extra)
+                                     verbose=False)
         out = []
         for res in results:
             if res.boxes is None or len(res.boxes) == 0:

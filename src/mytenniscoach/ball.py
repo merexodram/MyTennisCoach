@@ -17,12 +17,14 @@ class BallTracker:
 
     def __init__(self, device: str = "cpu"):
         self.device = device
-        self.half = device.startswith("cuda")
         self.model = upstream.ball_net()
         self.model.load_state_dict(torch.load(upstream.weights("tracknet_ball.pt"), map_location=device))
         self.model.to(device).eval()
-        if self.half:
-            self.model.half()                      # half precision: about twice as fast on a GPU
+        # Half precision is about twice as fast on a GPU, but on some cards it
+        # overflows and the network sees nothing. It is switched on only after
+        # it has reproduced the full-precision result on real frames.
+        self.half_state = "untested" if device.startswith("cuda") else "off"
+        self.model_half = None
         self.buf: deque[np.ndarray] = deque(maxlen=2)
 
     def reset(self) -> None:
@@ -49,20 +51,49 @@ class BallTracker:
         if not stacks:
             return out
         inp = torch.from_numpy(np.stack(stacks).transpose(0, 3, 1, 2)).to(self.device)
-        inp = (inp.half() if self.half else inp.float()) / 255.0
-        heat_all = self.model(inp).argmax(dim=1).reshape(-1, NET_H, NET_W).to(torch.uint8).cpu().numpy()
+        if self.half_state == "on":
+            heat_all = self._heat(self.model_half, inp.half())
+        else:
+            heat_all = self._heat(self.model, inp.float())
+            if self.half_state == "untested" and (heat_all > 127).any():
+                self._test_half(inp, heat_all)
         for k, heat in zip(slots, heat_all):
-            mask = (heat > 127).astype(np.uint8)
-            if not mask.any():
-                continue
-            n, labels, _, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
-            blobs = []
-            for i in range(1, n):
-                score = float(heat[labels == i].sum())
-                blobs.append((float(cents[i][0]) * w / NET_W, float(cents[i][1]) * h / NET_H, score))
-            blobs.sort(key=lambda t: -t[2])
-            out[k] = blobs[:4] or None
+            out[k] = self._blobs(heat, w, h)
         return out
+
+    @staticmethod
+    def _heat(model, inp: torch.Tensor) -> np.ndarray:
+        return model(inp / 255.0).argmax(dim=1).reshape(-1, NET_H, NET_W).to(torch.uint8).cpu().numpy()
+
+    def _test_half(self, inp: torch.Tensor, reference: np.ndarray) -> None:
+        """Enable half precision only if it finds the same ball pixels."""
+        import copy
+
+        try:
+            candidate = copy.deepcopy(self.model).half()
+            got = self._heat(candidate, inp.half())
+            a, b = reference > 127, got > 127
+            agree = (a & b).sum() / max(1, (a | b).sum())
+        except Exception:
+            agree = 0.0
+        if agree > 0.8:
+            self.model_half, self.half_state = candidate, "on"
+        else:
+            self.half_state = "off"
+        print(f"  ball network half precision: {self.half_state} (agreement {agree:.2f})")
+
+    @staticmethod
+    def _blobs(heat: np.ndarray, w: int, h: int):
+        mask = (heat > 127).astype(np.uint8)
+        if not mask.any():
+            return None
+        n, labels, _, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        blobs = []
+        for i in range(1, n):
+            score = float(heat[labels == i].sum())
+            blobs.append((float(cents[i][0]) * w / NET_W, float(cents[i][1]) * h / NET_H, score))
+        blobs.sort(key=lambda t: -t[2])
+        return blobs[:4] or None
 
     def step(self, frame: np.ndarray):
         return self.infer([frame])[0]

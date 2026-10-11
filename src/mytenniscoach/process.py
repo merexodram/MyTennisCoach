@@ -57,6 +57,9 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
         else:
             windows = [(0, n)]
         clock["scan"] = time.time() - t
+        if not windows:
+            log("  the scan found no play at all, which is suspicious: tracking every frame instead")
+            windows = [(0, n)]
         state = {"windows": windows, "next": 0,
                  "tr": {"Hs": [None] * n, "court_err": [float("inf")] * n, "ball": [None] * n,
                         "boxes": [empty] * n}}
