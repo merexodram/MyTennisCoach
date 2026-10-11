@@ -23,6 +23,28 @@ shots in `data\tennis.duckdb`, and a cache of the per-frame tracks in
 | Storage | `db.py` | One row per session, rally and shot. Re-processing a video replaces its rows. |
 | Video | `render.py` | Court lines, ball trail, player boxes, event labels and a mini-court with bounce marks. |
 
+## Own camera: mark the court once
+
+The court network was trained on broadcast footage shot from high up. On a
+club court filmed from a low camera it found the court in 0 of 1,633 frames.
+For a camera that does not move, the fix is to mark the court by hand once:
+
+1. Drag the video onto `calibrate.bat`.
+2. Click the point named in the window title; press S for one you cannot see.
+   Four points are the minimum, six or more across both halves are better. The
+   fitted court is drawn in green so you can check it against the real lines.
+3. Press Enter. `<video name>.court.json` is saved next to the video and
+   `analyze.bat` uses it automatically.
+
+First amateur test (8 s of a clay-court rally, camera about head height behind
+the baseline, court marked from 10 hand-picked points): ball tracked in 71 % of
+frames, both players found in every frame, 5 hits detected.
+
+A low camera squeezes the far half of the court into very few pixels (51 pixel
+rows for 12 m in that clip, so one pixel is 0.2 to 0.5 m of depth). Depth and
+in/out calls on the far side are therefore rough. Mounting the camera higher
+is the only real cure.
+
 ## What to trust, as of the first clips
 
 | Output | Trust | Why |
