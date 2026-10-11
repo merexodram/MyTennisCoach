@@ -223,8 +223,8 @@ def main() -> None:
         device = pick_device(args.device)
         print(f"Tracking {path.name}: {info.frames} frames, {info.width}x{info.height} @ {info.fps:.0f} fps on {device}")
         fixed_H = None
-        cal = Path(args.court_file) if args.court_file else court.calibration_file(original)
-        if cal.exists():
+        cal = Path(args.court_file) if args.court_file else court.find_calibration(original)
+        if cal is not None and cal.exists():
             fixed_H, cal_err = court.load_calibration(cal, info.width, info.height)
             print(f"Court from {cal.name} (fixed camera, fit error {cal_err:.1f} px)")
         tr = track(path, device, checkpoint=CACHE / f"{original.stem}_partial.pkl",

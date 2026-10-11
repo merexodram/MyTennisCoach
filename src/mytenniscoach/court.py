@@ -142,6 +142,16 @@ def calibration_file(video_path: Path) -> Path:
     return video_path.with_name(video_path.stem + ".court.json")
 
 
+def find_calibration(video_path: Path) -> Path | None:
+    """The court file for a video: next to it, or with the same name in data/raw or outputs/cache."""
+    name = video_path.stem + ".court.json"
+    root = Path(__file__).resolve().parents[2]
+    for folder in (video_path.parent, root / "data" / "raw", root / "outputs" / "cache", root):
+        if (folder / name).exists():
+            return folder / name
+    return None
+
+
 def save_calibration(path: Path, points: dict, size: tuple[int, int]) -> None:
     data = {"size": list(size), "points": {str(k): [float(v[0]), float(v[1])] for k, v in points.items()}}
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
