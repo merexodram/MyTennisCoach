@@ -248,6 +248,9 @@ def build_shots(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, 
                 s.stroke = "forehand" if ball_right == right_is_forehand else "backhand"
 
         target_sign = -1.0 if side == "near" else 1.0
+        # A ball lands within about 0.8 s of a serve and 1.6 s of any other stroke.
+        # Anything later belongs to another shot.
+        nxt = min(nxt, f + int(fps * (0.8 if s.stroke == "serve" else 1.6)))
         b_f = find_bounce(ball_px, Hs, f, nxt, fps, target_sign,
                           far_bounces if side == "near" else [], scale)
         H = Hs[b_f] if b_f is not None else None
