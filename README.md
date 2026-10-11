@@ -75,6 +75,7 @@ setup.bat        one-click install         analyze.bat   drag a video onto it
 download.bat     download the links in data\links.txt (yt-dlp, up to 1080p)
 calibrate.bat    own camera: click the court points and yourself, once per camera position
 prepare_colab.bat  get a recording ready for tracking on a free Colab GPU (docs/COLAB.md)
+coach.bat        after analysing: build the coach pack, store the written review (docs/COACH.md)
 src/mytenniscoach/   the pipeline: court, ball, players, events, db, render, process
 third_party/     upstream repositories as pinned submodules
 data/            footage, clips and tennis.duckdb   (local only, git-ignored)
@@ -89,7 +90,7 @@ outputs/         annotated videos                   (local only, git-ignored)
 | 0 Validation | Run upstream models on professional broadcast clips | Tracking quality judged good enough to continue ([criteria](docs/VALIDATION.md)) |
 | 1 Tracking | Own pipeline: court + TrackNet ball + players, streaming (no full video in RAM), results written to the database | A full match processes unattended and fills `sessions` and `shots`. **In progress: works on clips; full match and GPU run still to do** |
 | 2 Technique | Pose, stroke classification, per-stroke metrics, clip retention | `pose_metrics` filled; raw video can be deleted. **Started: pose and first measurements for the marked player** |
-| 3 Coach | Session review and monthly trend review | Review generated from the database after each session |
+| 3 Coach | Session review and monthly trend review | Review generated from the database after each session. **Plumbing built (pack, clips, review storage); first real review waits for own footage** |
 | 4 Match logic | Points, score, forced and unforced errors, opponent patterns | `points` filled automatically |
 
 Own-camera footage enters between Phase 0 and Phase 1: a phone on the back
