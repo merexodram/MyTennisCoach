@@ -26,13 +26,26 @@ class PlayerFinder:
         self.model = YOLO(weights or str(upstream.MODELS / "yolov8s.pt"))
         self.device = device
         self.imgsz = imgsz
+        self.batch = 2
 
     def people_batch(self, frames: list[np.ndarray]) -> list[np.ndarray]:
         """For each frame, an (N, 5) array: x1, y1, x2, y2, confidence per person."""
         if not frames:
             return []
-        results = self.model.predict(frames, classes=[0], conf=0.25, imgsz=self.imgsz, device=self.device,
-                                     verbose=False)
+        import torch
+
+        results, k = [], 0
+        while k < len(frames):                             # small batches: the GPU is shared with two other networks
+            try:
+                results += self.model.predict(frames[k: k + self.batch], classes=[0], conf=0.25, imgsz=self.imgsz,
+                                              device=self.device, verbose=False)
+                k += self.batch
+            except torch.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                if self.batch == 1:
+                    raise
+                self.batch = max(1, self.batch // 2)
+                print(f"  GPU memory full: player network batch reduced to {self.batch}")
         out = []
         for res in results:
             if res.boxes is None or len(res.boxes) == 0:

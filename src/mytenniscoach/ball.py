@@ -25,6 +25,7 @@ class BallTracker:
         # it has reproduced the full-precision result on real frames.
         self.half_state = "untested" if device.startswith("cuda") else "off"
         self.model_half = None
+        self.max_batch = 2                         # doubled once half precision is on; halved if memory runs out
         self.buf: deque[np.ndarray] = deque(maxlen=2)
 
     def reset(self) -> None:
@@ -50,16 +51,31 @@ class BallTracker:
         out: list = [None] * len(frames)
         if not stacks:
             return out
+        done = 0
+        while done < len(stacks):
+            part = stacks[done: done + self.max_batch]
+            try:
+                heat_all = self._run(part)
+            except torch.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                if self.max_batch == 1:
+                    raise
+                self.max_batch = max(1, self.max_batch // 2)
+                print(f"  GPU memory full: ball network batch reduced to {self.max_batch}")
+                continue
+            for k, heat in zip(slots[done: done + len(part)], heat_all):
+                out[k] = self._blobs(heat, w, h)
+            done += len(part)
+        return out
+
+    def _run(self, stacks: list[np.ndarray]) -> np.ndarray:
         inp = torch.from_numpy(np.stack(stacks).transpose(0, 3, 1, 2)).to(self.device)
         if self.half_state == "on":
-            heat_all = self._heat(self.model_half, inp.half())
-        else:
-            heat_all = self._heat(self.model, inp.float())
-            if self.half_state == "untested" and (heat_all > 127).any():
-                self._test_half(inp, heat_all)
-        for k, heat in zip(slots, heat_all):
-            out[k] = self._blobs(heat, w, h)
-        return out
+            return self._heat(self.model_half, inp.half())
+        heat_all = self._heat(self.model, inp.float())
+        if self.half_state == "untested" and (heat_all > 127).any():
+            self._test_half(inp, heat_all)
+        return heat_all
 
     @staticmethod
     def _heat(model, inp: torch.Tensor) -> np.ndarray:
@@ -74,10 +90,13 @@ class BallTracker:
             got = self._heat(candidate, inp.half())
             a, b = reference > 127, got > 127
             agree = (a & b).sum() / max(1, (a | b).sum())
-        except Exception:
-            agree = 0.0
+        except Exception:                          # includes running out of GPU memory
+            candidate, agree = None, 0.0
+            if self.device.startswith("cuda"):
+                torch.cuda.empty_cache()
         if agree > 0.8:
             self.model_half, self.half_state = candidate, "on"
+            self.max_batch *= 2                    # half precision needs half the memory
         else:
             self.half_state = "off"
         print(f"  ball network half precision: {self.half_state} (agreement {agree:.2f})")
