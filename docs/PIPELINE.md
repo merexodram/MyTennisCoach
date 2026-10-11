@@ -51,13 +51,22 @@ Three things keep a two-hour session from taking days:
 For a camera that does not move, add `--court-every 2` (or more): the court
 is then detected every 2 s instead of five times a second.
 
-Measured so far:
+Measured on the 4 GB laptop GPU, 3 min 25 s broadcast segment (1080p source):
 
-| Setup | Result |
-|---|---|
-| 4 GB laptop GPU, first version, 480p clip | 0.31 s per frame |
-| 4 GB laptop GPU, with batches and half precision | not measured yet |
-| Scan on a 3 min 25 s broadcast segment with close-ups and a low camera | kept 40 % of the frames; all six main-camera stretches found, none of the close-ups |
+| Version | Frames tracked | Time |
+|---|---|---|
+| First version, every frame | 5,134 | about 24 min |
+| Working copy + scan + batches | 2,025 (40 %) | 10.8 min |
+
+Where the 10.8 minutes went: ball network 436 s, scan 79 s, court 69 s,
+players 60 s, decoding 4 s. The whole gain came from skipping footage. Per
+tracked frame the cost stayed at about 0.27 s: the ball network (TrackNet) is
+the bottleneck, and half precision passes its self-check but brings no speed
+on this card. Since then, frames inside a kept stretch where the court is out
+of view are skipped as well, and the padding is 2 s instead of 3 s.
+
+The annotated video contains only the kept stretches; `--full-video` gives the
+whole recording.
 
 The scan has only been tested on broadcast footage, where the court check does
 most of the work. On a fixed own camera the court is always in view, so the

@@ -41,6 +41,9 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
     n = info.frames
     step = max(1, int(round(info.fps * court_every_s)))
     batch = batch or (8 if device.startswith("cuda") else 2)
+    if device.startswith("cuda"):
+        import torch
+        torch.backends.cudnn.benchmark = True              # fixed input sizes: let cuDNN pick its fastest method
     cd, bt, pf = court.CourtDetector(device), ball.BallTracker(device), players.PlayerFinder(device)
     empty = np.zeros((0, 5), np.float32)
     clock = {"scan": 0.0, "decode": 0.0, "court": 0.0, "ball": 0.0, "players": 0.0}
@@ -97,11 +100,15 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
                         H = None                           # not the main camera view
                 tr["Hs"][i + k], tr["court_err"][i + k] = H, err
             clock["court"] += time.time() - t
+            in_view = [k for k in range(len(frames)) if tr["Hs"][i + k] is not None]
             t = time.time()
-            blobs = bt.infer(frames)
+            if in_view:
+                blobs = bt.infer(frames)
+            else:                                          # close-up or replay: nothing to track here
+                blobs = [None] * len(frames)
+                bt.reset()
             clock["ball"] += time.time() - t
             t = time.time()
-            in_view = [k for k in range(len(frames)) if tr["Hs"][i + k] is not None]
             found = pf.people_batch([frames[k] for k in in_view])
             clock["players"] += time.time() - t
             for k, boxes in zip(in_view, found):
@@ -169,6 +176,8 @@ def main() -> None:
     ap.add_argument("--no-db", action="store_true")
     ap.add_argument("--redo", action="store_true", help="ignore cached tracks")
     ap.add_argument("--all-frames", action="store_true", help="track every frame instead of only where a ball is in play")
+    ap.add_argument("--full-video", action="store_true",
+                    help="annotated video of the whole recording, not only the stretches with play")
     ap.add_argument("--no-proxy", action="store_true", help="analyse the original file, not a 720p working copy")
     ap.add_argument("--court-every", type=float, default=0.2,
                     help="seconds between court detections (use 2 or more for a fixed camera)")
@@ -216,7 +225,8 @@ def main() -> None:
 
     if not args.no_video:
         out = OUT / f"{original.stem}_annotated.mp4"
-        render.render(path, out, info, tr["Hs"], ball_px, chosen, shots)
+        keep = None if args.full_video else tr.get("windows")
+        render.render(path, out, info, tr["Hs"], ball_px, chosen, shots, keep=keep)
         print(f"Wrote {out}")
 
 

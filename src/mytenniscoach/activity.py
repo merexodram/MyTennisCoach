@@ -60,7 +60,7 @@ def merge(active_starts: list[int], n_frames: int, fps: float, period: int,
 
 
 def find_windows(path, info: video.VideoInfo, ball_tracker, court_detector=None, burst: int = 8,
-                 period_s: float = 2.0, pad_s: float = 3.0, join_s: float = 4.0, log=print, details: list | None = None
+                 period_s: float = 2.0, pad_s: float = 2.0, join_s: float = 4.0, log=print, details: list | None = None
                  ) -> list[tuple[int, int]]:
     """Stretches of the video where a ball is in play, as [start, end) frame pairs.
 

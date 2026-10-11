@@ -52,7 +52,25 @@ def to_h264(raw: Path, final: Path) -> bool:
     return subprocess.call(cmd) == 0 and final.exists() and final.stat().st_size > 0
 
 
-def render(path, out_path, info, Hs, ball_px, players, shots):
+def _frames(path, n: int, keep):
+    """All frames, or only those inside the kept [start, end) stretches."""
+    if not keep or (len(keep) == 1 and keep[0][0] == 0 and keep[0][1] >= n):
+        yield from video.frames(path)
+        return
+    reader = video.Reader(path)
+    for a, b in keep:
+        pos = a
+        while pos < b:
+            chunk = reader.read(pos, min(32, b - pos))
+            if not chunk:
+                break
+            for frame in chunk:
+                yield pos, frame
+                pos += 1
+    reader.close()
+
+
+def render(path, out_path, info, Hs, ball_px, players, shots, keep=None):
     out_path = Path(out_path)
     raw_path = out_path.with_name(out_path.stem + "_raw.mp4")
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -64,7 +82,7 @@ def render(path, out_path, info, Hs, ball_px, players, shots):
     done: list = []
     label, label_until = "", -1
 
-    for i, frame in video.frames(path):
+    for i, frame in _frames(path, len(Hs), keep):
         H = Hs[i]
         if H is not None:
             img_pts = court.to_image(H, court.KEYPOINTS_M)
