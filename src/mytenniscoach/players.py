@@ -27,13 +27,23 @@ class PlayerFinder:
         self.device = device
         self.imgsz = imgsz
 
+    def people_batch(self, frames: list[np.ndarray]) -> list[np.ndarray]:
+        """For each frame, an (N, 5) array: x1, y1, x2, y2, confidence per person."""
+        if not frames:
+            return []
+        extra = {"half": True} if str(self.device).startswith("cuda") else {}
+        results = self.model.predict(frames, classes=[0], conf=0.25, imgsz=self.imgsz, device=self.device,
+                                     verbose=False, **extra)
+        out = []
+        for res in results:
+            if res.boxes is None or len(res.boxes) == 0:
+                out.append(np.zeros((0, 5), dtype=np.float32))
+            else:
+                out.append(np.hstack([res.boxes.xyxy.cpu().numpy(), res.boxes.conf.cpu().numpy()[:, None]]))
+        return out
+
     def people(self, frame: np.ndarray) -> np.ndarray:
-        """Return (N, 5): x1, y1, x2, y2, confidence for every person."""
-        res = self.model.predict(frame, classes=[0], conf=0.25, imgsz=self.imgsz,
-                                 device=self.device, verbose=False)[0]
-        if res.boxes is None or len(res.boxes) == 0:
-            return np.zeros((0, 5), dtype=np.float32)
-        return np.hstack([res.boxes.xyxy.cpu().numpy(), res.boxes.conf.cpu().numpy()[:, None]])
+        return self.people_batch([frame])[0]
 
 
 def feet(box: np.ndarray) -> tuple[float, float]:

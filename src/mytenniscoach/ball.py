@@ -13,35 +13,59 @@ NET_W, NET_H = 640, 360
 
 
 class BallTracker:
-    """Feed frames in order; returns the ball position for each frame (or None)."""
+    """TrackNet wrapper. Frames must be fed in order; call reset() after a jump."""
 
     def __init__(self, device: str = "cpu"):
         self.device = device
+        self.half = device.startswith("cuda")
         self.model = upstream.ball_net()
         self.model.load_state_dict(torch.load(upstream.weights("tracknet_ball.pt"), map_location=device))
         self.model.to(device).eval()
-        self.buf: deque[np.ndarray] = deque(maxlen=3)
+        if self.half:
+            self.model.half()                      # half precision: about twice as fast on a GPU
+        self.buf: deque[np.ndarray] = deque(maxlen=2)
+
+    def reset(self) -> None:
+        self.buf.clear()
 
     @torch.no_grad()
+    def infer(self, frames: list[np.ndarray]) -> list:
+        """Ball candidates for a run of consecutive frames, in one batch.
+
+        Each result is a list of up to 4 blobs (x, y, score), strongest first,
+        or None. The first two frames after a reset have no history and give None.
+        """
+        if not frames:
+            return []
+        h, w = frames[0].shape[:2]
+        stacks, slots = [], []
+        for k, frame in enumerate(frames):
+            small = cv2.resize(frame, (NET_W, NET_H))
+            if len(self.buf) == 2:
+                stacks.append(np.concatenate((small, self.buf[1], self.buf[0]), axis=2))
+                slots.append(k)
+            self.buf.append(small)
+        out: list = [None] * len(frames)
+        if not stacks:
+            return out
+        inp = torch.from_numpy(np.stack(stacks).transpose(0, 3, 1, 2)).to(self.device)
+        inp = (inp.half() if self.half else inp.float()) / 255.0
+        heat_all = self.model(inp).argmax(dim=1).reshape(-1, NET_H, NET_W).to(torch.uint8).cpu().numpy()
+        for k, heat in zip(slots, heat_all):
+            mask = (heat > 127).astype(np.uint8)
+            if not mask.any():
+                continue
+            n, labels, _, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+            blobs = []
+            for i in range(1, n):
+                score = float(heat[labels == i].sum())
+                blobs.append((float(cents[i][0]) * w / NET_W, float(cents[i][1]) * h / NET_H, score))
+            blobs.sort(key=lambda t: -t[2])
+            out[k] = blobs[:4] or None
+        return out
+
     def step(self, frame: np.ndarray):
-        h, w = frame.shape[:2]
-        self.buf.append(cv2.resize(frame, (NET_W, NET_H)))
-        if len(self.buf) < 3:
-            return None
-        stack = np.concatenate((self.buf[2], self.buf[1], self.buf[0]), axis=2).astype(np.float32) / 255.0
-        inp = torch.from_numpy(stack.transpose(2, 0, 1)).unsqueeze(0).to(self.device)
-        out = self.model(inp)                      # (1, 256, H*W) class scores per pixel
-        heat = out.argmax(dim=1).reshape(NET_H, NET_W).cpu().numpy().astype(np.uint8)
-        mask = (heat > 127).astype(np.uint8)
-        if mask.sum() == 0:
-            return None
-        n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
-        blobs = []
-        for i in range(1, n):
-            score = float(heat[labels == i].sum())
-            blobs.append((float(cents[i][0]) * w / NET_W, float(cents[i][1]) * h / NET_H, score))
-        blobs.sort(key=lambda t: -t[2])
-        return blobs[:4] or None                   # strongest first
+        return self.infer([frame])[0]
 
 
 def _as_candidates(track: list) -> list[list]:

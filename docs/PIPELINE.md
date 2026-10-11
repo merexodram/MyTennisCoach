@@ -35,8 +35,34 @@ shots in `data\tennis.duckdb`, and a cache of the per-frame tracks in
 | Bounce position, in/out | low to medium | One pixel is 0.2 to 0.3 m at the far baseline; calls within 0.4 m of a line are flagged with confidence 0.5 |
 | Speed | low | Average ground speed from contact to bounce, not racket speed |
 
-## Speed
+## Speed: how a long recording is handled
 
-On a CPU the tracking pass takes about 6 s per frame (TrackNet is the heavy
-part). On a GPU it should be many times faster; this has not been measured on
-the 4 GB laptop GPU yet.
+Three things keep a two-hour session from taking days:
+
+1. **Working copy.** Anything above 720p or 32 fps is first converted to a
+   720p copy at 25 to 30 fps (`outputs\cache\<name>_proxy.mp4`). The networks
+   look at 640x360 images anyway. The original is kept for cutting
+   full-quality technique clips later.
+2. **Scan for play.** Every 2 s, a burst of 8 frames is checked: is the court
+   in view, and is a ball travelling on a smooth path? Only those stretches,
+   padded by 3 s, get full tracking. `--all-frames` turns this off.
+3. **Batches at half precision** on the GPU.
+
+For a camera that does not move, add `--court-every 2` (or more): the court
+is then detected every 2 s instead of five times a second.
+
+Measured so far:
+
+| Setup | Result |
+|---|---|
+| 4 GB laptop GPU, first version, 480p clip | 0.31 s per frame |
+| 4 GB laptop GPU, with batches and half precision | not measured yet |
+| Scan on a 3 min 25 s broadcast segment with close-ups and a low camera | kept 40 % of the frames; all six main-camera stretches found, none of the close-ups |
+
+The scan has only been tested on broadcast footage, where the court check does
+most of the work. On a fixed own camera the court is always in view, so the
+ball-path check decides alone; that needs testing on real own footage.
+
+The log ends with a line such as
+`tracking took 4.0 min (scan 0s, decode 0s, court 30s, ball 187s, players 22s)`,
+which shows where the time goes.

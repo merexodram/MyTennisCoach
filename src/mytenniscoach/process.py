@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import ball, court, db, events, players, render, video
+from . import activity, ball, court, db, events, players, proxy, render, video
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "outputs"
@@ -29,46 +29,98 @@ def pick_device(name: str) -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkpoint: Path | None = None) -> dict:
-    """One streaming pass: court, ball and players for every frame.
+def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkpoint: Path | None = None,
+          scan: bool = True, batch: int | None = None, min_scan_s: float = 60.0) -> dict:
+    """Court, ball and players for every frame worth looking at.
 
-    With a checkpoint path, progress is saved every 100 frames and an
-    interrupted run resumes where it stopped.
+    1. Scan: short bursts through the ball network find where a ball is in play.
+    2. Track: only those stretches get the full treatment, in batches.
+    Progress is saved regularly; an interrupted run resumes where it stopped.
     """
     info = video.probe(path)
+    n = info.frames
     step = max(1, int(round(info.fps * court_every_s)))
+    batch = batch or (8 if device.startswith("cuda") else 2)
     cd, bt, pf = court.CourtDetector(device), ball.BallTracker(device), players.PlayerFinder(device)
+    empty = np.zeros((0, 5), np.float32)
+    clock = {"scan": 0.0, "decode": 0.0, "court": 0.0, "ball": 0.0, "players": 0.0}
 
-    tr = {"Hs": [], "court_err": [], "ball": [], "boxes": []}
+    state = None
     if checkpoint is not None and checkpoint.exists():
-        tr = pickle.loads(checkpoint.read_bytes())
-        log(f"  resuming at frame {len(tr['Hs'])}")
-    done = len(tr["Hs"])
-    H = tr["Hs"][-1] if done else None
-    err = tr["court_err"][-1] if done else float("inf")
-    t0 = time.time()
-    for i, frame in video.frames(path):
-        if i < done:
-            if i >= done - 2:
-                bt.step(frame)                             # refill the ball net's 3-frame buffer
+        state = pickle.loads(checkpoint.read_bytes())
+        if "windows" not in state:
+            state = None                                   # checkpoint from an older version
+    if state is None:
+        t = time.time()
+        if scan and n > info.fps * min_scan_s:             # not worth it for clips under a minute
+            windows = activity.find_windows(path, info, bt, cd, log=log)
+        else:
+            windows = [(0, n)]
+        clock["scan"] = time.time() - t
+        state = {"windows": windows, "next": 0,
+                 "tr": {"Hs": [None] * n, "court_err": [float("inf")] * n, "ball": [None] * n,
+                        "boxes": [empty] * n}}
+    else:
+        log(f"  resuming at frame {state['next']}")
+    windows, tr = state["windows"], state["tr"]
+    todo = sum(b - a for a, b in windows)
+    log(f"  ball in play in {len(windows)} stretch(es): {todo} of {n} frames ({100 * todo / max(n, 1):.0f}%) to track")
+
+    reader = video.Reader(path)
+    done, t0, last_save = 0, time.time(), time.time()
+    for a, b in windows:
+        if b <= state["next"]:
+            done += b - a
             continue
-        if i % step == 0:
-            kps = cd.keypoints(frame)
-            H, n_inl, err = court.fit_homography(kps)
-            if H is not None and (n_inl < 8 or err > 5.0):
-                H = None                                   # not the main camera view
-        tr["Hs"].append(H)
-        tr["court_err"].append(err)
-        # Keep feeding the ball net so its 3-frame buffer stays in order.
-        b = bt.step(frame)
-        tr["ball"].append(b if H is not None else None)
-        tr["boxes"].append(pf.people(frame) if H is not None else np.zeros((0, 5), np.float32))
-        if (i + 1) % 50 == 0:
-            log(f"  frame {i + 1}/{info.frames}  {(time.time() - t0) / (i + 1 - done):.2f} s/frame")
-        if checkpoint is not None and (i + 1) % 100 == 0:
-            checkpoint.write_bytes(pickle.dumps(tr))
+        i = max(a, state["next"])
+        done += i - a
+        bt.reset()
+        H, err = None, float("inf")
+        if i > a:                                          # resuming inside a stretch
+            bt.infer(reader.read(max(a, i - 2), i - max(a, i - 2)))
+            H, err = tr["Hs"][i - 1], tr["court_err"][i - 1]
+        while i < b:
+            t = time.time()
+            frames = reader.read(i, min(batch, b - i))
+            clock["decode"] += time.time() - t
+            if not frames:
+                break
+            t = time.time()
+            for k, frame in enumerate(frames):
+                if (i + k - a) % step == 0:
+                    kps = cd.keypoints(frame)
+                    H, n_inl, err = court.fit_homography(kps)
+                    if H is not None and (n_inl < 8 or err > 5.0):
+                        H = None                           # not the main camera view
+                tr["Hs"][i + k], tr["court_err"][i + k] = H, err
+            clock["court"] += time.time() - t
+            t = time.time()
+            blobs = bt.infer(frames)
+            clock["ball"] += time.time() - t
+            t = time.time()
+            in_view = [k for k in range(len(frames)) if tr["Hs"][i + k] is not None]
+            found = pf.people_batch([frames[k] for k in in_view])
+            clock["players"] += time.time() - t
+            for k, boxes in zip(in_view, found):
+                tr["ball"][i + k] = blobs[k]
+                tr["boxes"][i + k] = boxes
+            before = done
+            i += len(frames)
+            done += len(frames)
+            state["next"] = i
+            if done // 250 != before // 250:
+                rate = (time.time() - t0) / max(1, done)
+                log(f"  {done}/{todo} frames  {rate:.3f} s/frame  about {rate * (todo - done) / 60:.0f} min left")
+            if checkpoint is not None and time.time() - last_save > 120:
+                checkpoint.write_bytes(pickle.dumps(state))
+                last_save = time.time()
+    reader.close()
     if checkpoint is not None and checkpoint.exists():
         checkpoint.unlink()
+    total = time.time() - t0 + clock["scan"]
+    parts = ", ".join(f"{k} {v:.0f}s" for k, v in clock.items())
+    log(f"  tracking took {total / 60:.1f} min ({parts})")
+    tr["windows"] = windows
     return tr
 
 
@@ -113,12 +165,18 @@ def main() -> None:
     ap.add_argument("--no-video", action="store_true", help="skip the annotated video")
     ap.add_argument("--no-db", action="store_true")
     ap.add_argument("--redo", action="store_true", help="ignore cached tracks")
+    ap.add_argument("--all-frames", action="store_true", help="track every frame instead of only where a ball is in play")
+    ap.add_argument("--no-proxy", action="store_true", help="analyse the original file, not a 720p working copy")
+    ap.add_argument("--court-every", type=float, default=0.2,
+                    help="seconds between court detections (use 2 or more for a fixed camera)")
     args = ap.parse_args()
 
-    path = Path(args.video).resolve()
-    info = video.probe(path)
+    original = Path(args.video).resolve()
     CACHE.mkdir(parents=True, exist_ok=True)
-    cache = CACHE / f"{path.stem}_tracks.pkl"
+    cache = CACHE / f"{original.stem}_tracks.pkl"
+    # Work on a 720p copy when the recording is larger or faster than needed.
+    path = original if args.no_proxy else proxy.make(original, CACHE / f"{original.stem}_proxy.mp4")
+    info = video.probe(path)
 
     if cache.exists() and not args.redo:
         print(f"Using cached tracks: {cache.name}")
@@ -126,7 +184,8 @@ def main() -> None:
     else:
         device = pick_device(args.device)
         print(f"Tracking {path.name}: {info.frames} frames, {info.width}x{info.height} @ {info.fps:.0f} fps on {device}")
-        tr = track(path, device, checkpoint=CACHE / f"{path.stem}_partial.pkl")
+        tr = track(path, device, checkpoint=CACHE / f"{original.stem}_partial.pkl",
+                   scan=not args.all_frames, court_every_s=args.court_every)
         cache.write_bytes(pickle.dumps(tr))
 
     hands = {"near": args.near_hand, "far": args.far_hand}
@@ -143,6 +202,7 @@ def main() -> None:
 
     if not args.no_db:
         con = db.connect(args.db)
+        info.path = original                               # the session belongs to the recording, not its copy
         sid = db.save_session(con, info, shots, {
             "kind": args.kind, "source": args.source, "surface": args.surface, "player": args.player,
             "opponent": args.opponent, "notes": args.notes, "me_side": args.me,
@@ -152,7 +212,7 @@ def main() -> None:
         print(f"Saved as session {sid} in {args.db}")
 
     if not args.no_video:
-        out = OUT / f"{path.stem}_annotated.mp4"
+        out = OUT / f"{original.stem}_annotated.mp4"
         render.render(path, out, info, tr["Hs"], ball_px, chosen, shots)
         print(f"Wrote {out}")
 
