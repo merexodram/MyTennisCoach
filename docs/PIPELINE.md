@@ -8,6 +8,9 @@ python scripts\report.py
 python scripts\report.py --session 1
 ```
 
+In/out uses the singles side lines by default; add `--doubles` for a doubles
+match. A serve must land in the service box either way.
+
 Output: an annotated video in `outputs\`, one session with its rallies and
 shots in `data\tennis.duckdb`, and a cache of the per-frame tracks in
 `outputs\cache\` (so changing the event rules and re-running takes seconds).
@@ -48,7 +51,8 @@ that, and a third is up to the camera:
 2. **Far-half zoom.** With a calibrated low camera, the ball network looks at
    the far half a second time, enlarged (2x in that clip). On the 8 s test this
    raised ball coverage from 71 % to 99 %; where both views saw the ball they
-   agreed within about 1 pixel. It roughly doubles the ball-tracking time.
+   agreed within about 1 pixel. Only the view that covers the ball is run (both
+   near the net line and when the ball is lost), about 1.3 runs per frame.
    `--far-zoom off` disables it.
 3. Camera height. Depth on the far side (how deep a ball landed, in or out)
    still depends on how many pixel rows the far half gets. Higher is better;

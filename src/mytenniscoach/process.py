@@ -55,9 +55,11 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
         if zoom is None and far_zoom == "on":
             log("  far-half zoom not needed: the far half is already large in this picture")
     bt_far = ball.BallTracker(device) if zoom is not None else None
+    passes, band, lost_after = 0, None, int(info.fps * 0.5)
     if zoom is not None:
-        log(f"  low camera: the far half is also tracked enlarged ({info.width / zoom[2]:.1f}x), "
-            "which roughly doubles the ball-tracking time")
+        net_line = float(court.to_image(fixed_H, [(0.0, 0.0)])[0][1])
+        band = (net_line - 0.15 * zoom[3], zoom[1] + 0.9 * zoom[3])
+        log(f"  low camera: the far half is also tracked enlarged ({info.width / zoom[2]:.1f}x)")
     empty = np.zeros((0, 5), np.float32)
     clock = {"scan": 0.0, "decode": 0.0, "court": 0.0, "ball": 0.0, "players": 0.0}
 
@@ -96,6 +98,7 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
         bt.reset()
         if bt_far is not None:
             bt_far.reset()
+        look, seen, seen_at = "both", None, -10**9
         H, err = (fixed_H, 0.0) if fixed_H is not None else (None, float("inf"))
         if i > a:                                          # resuming inside a stretch
             warm = reader.read(max(a, i - 2), i - max(a, i - 2))
@@ -121,11 +124,32 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
             clock["court"] += time.time() - t
             in_view = [k for k in range(len(frames)) if tr["Hs"][i + k] is not None]
             t = time.time()
-            if in_view:
+            if in_view and bt_far is None:
                 blobs = bt.infer(frames)
-                if bt_far is not None:                     # enlarged candidates first: they are the sharper ones
-                    far = bt_far.infer(frames, zoom)
-                    blobs = [((f or []) + (b or [])) or None for f, b in zip(far, blobs)]
+            elif in_view:
+                # Two views of the ball: the whole picture and the far half enlarged.
+                # Run only the one that covers where the ball is; both near the net
+                # line, where it changes hands, and whenever the ball is lost.
+                use_wide, use_far = look in ("both", "wide"), look in ("both", "far")
+                wide = bt.infer(frames) if use_wide else [None] * len(frames)
+                far = bt_far.infer(frames, zoom) if use_far else [None] * len(frames)
+                if not use_wide:
+                    bt.reset()
+                if not use_far:
+                    bt_far.reset()
+                passes += len(frames) * (use_wide + use_far)
+                blobs = [((f or []) + (b or [])) or None for f, b in zip(far, wide)]   # enlarged candidates first
+                for k, found_k in enumerate(blobs):
+                    if found_k:
+                        seen, seen_at = found_k[0], i + k
+                if seen is None or i + len(frames) - 1 - seen_at > lost_after:
+                    look = "both"
+                elif seen[1] < band[0] and zoom[0] + 0.08 * zoom[2] < seen[0] < zoom[0] + 0.92 * zoom[2]:
+                    look = "far"
+                elif seen[1] > band[1]:
+                    look = "wide"
+                else:
+                    look = "both"
             else:                                          # close-up or replay: nothing to track here
                 blobs = [None] * len(frames)
                 bt.reset()
@@ -150,16 +174,18 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
     if checkpoint is not None and checkpoint.exists():
         checkpoint.unlink()
     total = time.time() - t0 + clock["scan"]
+    if bt_far is not None and done:
+        log(f"  ball network runs per frame: {passes / max(1, done):.2f} (2.00 would be both views all the time)")
     parts = ", ".join(f"{k} {v:.0f}s" for k, v in clock.items())
     log(f"  tracking took {total / 60:.1f} min ({parts})")
     tr["windows"] = windows
     return tr
 
 
-def analyse(info: video.VideoInfo, tr: dict, hands: dict):
+def analyse(info: video.VideoInfo, tr: dict, hands: dict, doubles: bool = False):
     ball_px = ball.clean_track(tr["ball"], max_jump_px=info.width * 0.12)
     chosen = players.select(tr["boxes"], tr["Hs"])
-    shots = events.build_shots(ball_px, chosen, tr["Hs"], info.fps, info.height, hands)
+    shots = events.build_shots(ball_px, chosen, tr["Hs"], info.fps, info.height, hands, doubles=doubles)
     return ball_px, chosen, shots
 
 
@@ -187,6 +213,8 @@ def main() -> None:
     ap.add_argument("--db", default=str(db.DEFAULT_DB))
     ap.add_argument("--near-hand", default="right", choices=["right", "left"])
     ap.add_argument("--far-hand", default="right", choices=["right", "left"])
+    ap.add_argument("--doubles", action="store_true",
+                    help="doubles match: the outer side lines count (default: singles, inner side lines)")
     ap.add_argument("--me", default="near", choices=["near", "far"], help="which player is analysed as 'me'")
     ap.add_argument("--kind", default="reference", choices=["match", "training", "reference"])
     ap.add_argument("--source", default="broadcast", choices=["broadcast", "action_cam", "phone"])
@@ -236,7 +264,8 @@ def main() -> None:
         cache.write_bytes(pickle.dumps(tr))
 
     hands = {"near": args.near_hand, "far": args.far_hand}
-    ball_px, chosen, shots = analyse(info, tr, hands)
+    ball_px, chosen, shots = analyse(info, tr, hands, doubles=args.doubles)
+    print(f"Lines: {'doubles' if args.doubles else 'singles'} (side lines used for in/out)")
     s = summary(info, tr, ball_px, chosen, shots)
     print(f"Court in view: {s['court_view_frames']}/{s['frames']} frames")
     print(f"Ball tracked:  {s['ball_raw_pct']:.0f}% raw, {s['ball_clean_pct']:.0f}% after cleaning")

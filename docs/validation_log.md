@@ -70,3 +70,28 @@ a useful self-check. Far-side bounces are still doubtful (the serve bounce is
 placed at the net), and far-side serve speeds are still far too low. The last
 shot of the clip ends at the net and is labelled a winner; it should be a net
 error.
+
+## Amateur footage and the 32-shot rally (2026-10-11)
+
+Clip: a 54 s clay-court rally filmed from about head height behind the
+baseline, known to contain 32 shots. Court marked by hand (10 points), far-half
+zoom on, 4 GB laptop GPU.
+
+| | Result |
+|---|---|
+| Ball tracked | 93 % raw, 98 % after cleaning |
+| Players found | 99 % / 99 % |
+| Tracking time | 15.4 min (ball 810 s, players 110 s) with both ball views on every frame |
+| Hits, event logic as it was | 40, of which 29 by the near player: far-side bounces and near-side bounces counted as hits, far-side hits missed |
+| Hits, after the fixes below | 30, alternating between the players except in 2 places (each a missed far-side hit), against 32 true |
+
+Fixes: the near player's reach no longer covers the far court (from a low
+camera that player fills much of the picture); a near hit must be on the near
+side or directly overhead; two quick turns of the ball at the same player are
+bounce plus stroke, not two strokes; a far-side hit only has to send the ball
+just past the net line. The same logic gives 28 shots on the 3-minute Murray
+clip (26 before) and now finds the return of the first serve there.
+
+Also: bounces are placed where the falling and rising arcs meet, between
+frames; and only the ball view that covers the ball is run (1.25 to 1.33 runs
+per frame instead of 2 in tests), which is not yet timed on the GPU.

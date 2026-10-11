@@ -131,8 +131,17 @@ def find_hits(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, fr
 
         if r1["sign"] > 0:                       # was coming down the screen, now going up
             t = int(valid[np.argmax(y[valid])])
-            near = any(_in_zone(ball_px[f], players[f].get("near"), 1.5, 1.0, 0.5)
+            # Within racket reach of the near player. From a low camera that player
+            # fills much of the picture, so the reach must stay tight or it would
+            # swallow bounces on the far side.
+            near = any(_in_zone(ball_px[f], players[f].get("near"), 1.0, 0.5, 0.3)
                        for f in (r1["end"], t, r2["start"]))
+            # The ball must really be on the near side (below the net line in the
+            # picture), unless it is right above the player's head: a serve or smash.
+            on_near_side = y[t] > net_y + 0.15 * (near_base_y - net_y)
+            overhead = any(_in_zone(ball_px[f], players[f].get("near"), 0.3, 0.25, 0.0)
+                           for f in (r1["end"], t, r2["start"]))
+            near = near and (on_near_side or overhead)
             seg = y[r2["start"]: r2["end"] + 1]
             crosses = np.nanmin(seg) < net_y - 2 * scale
             if near and crosses:
@@ -145,15 +154,22 @@ def find_hits(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, fr
                       for f in (r1["end"], t, r2["start"]))
             # Follow the ball until it turns again: did it come over the net?
             seg = y[r2["start"]: r2["end"] + 1]
-            crosses = np.nanmax(seg) > net_y + 0.2 * (near_base_y - net_y)
+            crosses = np.nanmax(seg) > net_y + 0.06 * (near_base_y - net_y)   # even a short ball gets this far
             if far and crosses:
                 cands.append((t, "far"))
 
     cands = [(_contact_frame(ball_px, players, t, side, fps), side) for t, side in cands]
     hits: list[tuple[int, str]] = []
     for t, side in sorted(cands):
-        if hits and t - hits[-1][0] < fps * 0.5:
-            continue                             # two hits cannot be this close
+        if hits and hits[-1][1] == side and t - hits[-1][0] < fps * 1.5:
+            # Two turns of the ball at the same player within 1.5 s: the first was
+            # the ball bouncing in front of them, the second is the stroke.
+            if side == "far":
+                far_bounces.append(hits[-1][0])
+            hits[-1] = (t, side)
+            continue
+        if hits and t - hits[-1][0] < fps * 0.3:
+            continue                             # two different players cannot hit this close together
         hits.append((t, side))
     return hits, far_bounces
 
@@ -166,7 +182,7 @@ def _sse(t: np.ndarray, v: np.ndarray, deg: int):
 
 
 def find_bounce(ball_px: np.ndarray, Hs: list, start: int, end: int, fps: float,
-                target_sign: float, hints: list[int], scale: float, latest: int | None = None) -> int | None:
+                target_sign: float, hints: list[int], scale: float, latest: int | None = None):
     """Where the ball lands between two hits.
 
     Before and after the bounce the ball flies on two smooth arcs. Fit the
@@ -184,11 +200,12 @@ def find_bounce(ball_px: np.ndarray, Hs: list, start: int, end: int, fps: float,
     x, y = ball_px[fr, 0], ball_px[fr, 1]
     whole = _sse(t, y, 2)[0] + _sse(t, x, 1)[0]
     # The receiver may take the ball soon after the bounce: allow a short second arc.
-    best, best_sse = None, float("inf")
+    best, best_sse, best_px = None, float("inf"), None
     for k in range(4, len(fr) - 2 + 1):
         sy1, c1 = _sse(t[:k], y[:k], 2)
         sy2, c2 = _sse(t[k:], y[k:], 2)
-        sse = sy1 + sy2 + _sse(t[:k], x[:k], 1)[0] + _sse(t[k:], x[k:], 1)[0]
+        sx1, cx1 = _sse(t[:k], x[:k], 1)
+        sse = sy1 + sy2 + sx1 + _sse(t[k:], x[k:], 1)[0]
         v_in = 2 * c1[-3] * t[k - 1] + c1[-2]            # image speed just before the split
         v_out = 2 * c2[-3] * t[k] + c2[-2]               # and just after
         if v_in - v_out < 0.8 * scale:
@@ -205,9 +222,18 @@ def find_bounce(ball_px: np.ndarray, Hs: list, start: int, end: int, fps: float,
             sse *= 0.7                                   # agrees with a direction reversal
         if sse < best_sse:
             best, best_sse = i, sse
+            # The bounce itself falls between two frames: it is where the falling
+            # arc meets the rising one.
+            roots = np.roots(c1 - c2)
+            roots = [float(r.real) for r in roots if abs(r.imag) < 1e-9 and t[k - 1] - 1.0 <= r.real <= t[k] + 1.0]
+            if roots:
+                tb = min(roots, key=lambda r: abs(r - (t[k - 1] + t[k]) / 2))
+                best_px = (float(np.polyval(cx1, tb)), float(np.polyval(c1, tb)))
+            else:
+                best_px = (float(ball_px[i, 0]), float(ball_px[i, 1]))
     if best is None or whole < 1.8 * max(best_sse, 1e-6) or whole < 1.5 * scale * scale * len(fr):
         return None                                      # one smooth arc explains it: no bounce seen
-    return best
+    return best, best_px
 
 
 def _nearby(players: list[dict], f: int, side: str, reach: int = 6):
@@ -220,7 +246,10 @@ def _nearby(players: list[dict], f: int, side: str, reach: int = 6):
 
 
 def build_shots(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, frame_h: int,
-                hands: dict | None = None) -> list[Shot]:
+                hands: dict | None = None, doubles: bool = False) -> list[Shot]:
+    # Singles: the ball must land inside the inner side lines. Doubles: the outer
+    # ones. A serve must land in the service box in both games.
+    side_line = court.HALF_DOUBLES if doubles else court.HALF_SINGLES
     hands = hands or {"near": "right", "far": "right"}
     hits, far_bounces = find_hits(ball_px, players, Hs, fps, frame_h)
     scale = frame_h / 480.0
@@ -254,21 +283,23 @@ def build_shots(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, 
         # A ball lands within about 0.8 s of a serve and 1.6 s of any other stroke.
         # Anything later belongs to another shot.
         latest = f + int(fps * (0.8 if s.stroke == "serve" else 1.6))
-        b_f = find_bounce(ball_px, Hs, f, nxt, fps, target_sign,
-                          far_bounces if side == "near" else [], scale, latest=latest)
+        found = find_bounce(ball_px, Hs, f, nxt, fps, target_sign,
+                            far_bounces if side == "near" else [], scale, latest=latest)
+        b_f, b_px = found if found is not None else (None, None)
         H = Hs[b_f] if b_f is not None else None
         if b_f is not None and H is not None:
-            bx, by = court.to_court(H, [ball_px[b_f]])[0]
+            bx, by = court.to_court(H, [b_px])[0]
             s.bounce_frame, s.bounce_xy_m = b_f, (float(bx), float(by))
             on_far_side = by * target_sign > 0
-            s.in_court = bool(on_far_side and abs(bx) <= court.HALF_SINGLES + 0.05
+            s.in_court = bool(on_far_side and abs(bx) <= side_line + 0.05
                               and abs(by) <= court.HALF_LENGTH + 0.05)
-            margins = [court.HALF_SINGLES - abs(bx), court.HALF_LENGTH - abs(by)]
+            margins = [side_line - abs(bx), court.HALF_LENGTH - abs(by)]
             if s.stroke == "serve" and s.contact_xy_m is not None:
                 # A serve must land in the diagonally opposite service box.
                 box_sign = -1.0 if s.contact_xy_m[0] > 0 else 1.0
-                s.in_court = bool(s.in_court and abs(by) <= court.SERVICE + 0.05 and bx * box_sign >= -0.05)
-                margins += [court.SERVICE - abs(by), bx * box_sign]
+                s.in_court = bool(s.in_court and abs(by) <= court.SERVICE + 0.05 and bx * box_sign >= -0.05
+                                  and abs(bx) <= court.HALF_SINGLES + 0.05)
+                margins += [court.SERVICE - abs(by), bx * box_sign, court.HALF_SINGLES - abs(bx)]
             depth_m = abs(by)
             s.depth = "short" if depth_m < court.SERVICE else ("mid" if depth_m < 9.0 else "deep")
             if s.contact_xy_m is not None:
