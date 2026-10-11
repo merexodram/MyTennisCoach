@@ -30,7 +30,8 @@ def pick_device(name: str) -> str:
 
 
 def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkpoint: Path | None = None,
-          scan: bool = True, batch: int | None = None, min_scan_s: float = 60.0) -> dict:
+          scan: bool = True, batch: int | None = None, min_scan_s: float = 60.0,
+          fixed_H: np.ndarray | None = None) -> dict:
     """Court, ball and players for every frame worth looking at.
 
     1. Scan: short bursts through the ball network find where a ball is in play.
@@ -44,7 +45,9 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
     if device.startswith("cuda"):
         import torch
         torch.backends.cudnn.benchmark = True              # fixed input sizes: let cuDNN pick its fastest method
-    cd, bt, pf = court.CourtDetector(device), ball.BallTracker(device), players.PlayerFinder(device)
+    # With a calibrated fixed camera the court is known: no court network needed.
+    cd = None if fixed_H is not None else court.CourtDetector(device)
+    bt, pf = ball.BallTracker(device), players.PlayerFinder(device)
     empty = np.zeros((0, 5), np.float32)
     clock = {"scan": 0.0, "decode": 0.0, "court": 0.0, "ball": 0.0, "players": 0.0}
 
@@ -81,10 +84,11 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
         i = max(a, state["next"])
         done += i - a
         bt.reset()
-        H, err = None, float("inf")
+        H, err = (fixed_H, 0.0) if fixed_H is not None else (None, float("inf"))
         if i > a:                                          # resuming inside a stretch
             bt.infer(reader.read(max(a, i - 2), i - max(a, i - 2)))
-            H, err = tr["Hs"][i - 1], tr["court_err"][i - 1]
+            if fixed_H is None:
+                H, err = tr["Hs"][i - 1], tr["court_err"][i - 1]
         while i < b:
             t = time.time()
             frames = reader.read(i, min(batch, b - i))
@@ -93,7 +97,7 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
                 break
             t = time.time()
             for k, frame in enumerate(frames):
-                if (i + k - a) % step == 0:
+                if cd is not None and (i + k - a) % step == 0:
                     kps = cd.keypoints(frame)
                     H, n_inl, err = court.fit_homography(kps)
                     if H is not None and (n_inl < 8 or err > 5.0):
@@ -179,6 +183,8 @@ def main() -> None:
     ap.add_argument("--full-video", action="store_true",
                     help="annotated video of the whole recording, not only the stretches with play")
     ap.add_argument("--no-proxy", action="store_true", help="analyse the original file, not a 720p working copy")
+    ap.add_argument("--court-file", default=None,
+                    help="court points clicked with calibrate.bat (default: <video name>.court.json next to the video)")
     ap.add_argument("--court-every", type=float, default=0.2,
                     help="seconds between court detections (use 2 or more for a fixed camera)")
     args = ap.parse_args()
@@ -196,8 +202,16 @@ def main() -> None:
     else:
         device = pick_device(args.device)
         print(f"Tracking {path.name}: {info.frames} frames, {info.width}x{info.height} @ {info.fps:.0f} fps on {device}")
+        fixed_H = None
+        cal = Path(args.court_file) if args.court_file else court.calibration_file(original)
+        if cal.exists():
+            fixed_H, cal_err = court.load_calibration(cal, info.width, info.height)
+            print(f"Court from {cal.name} (fixed camera, fit error {cal_err:.1f} px)")
         tr = track(path, device, checkpoint=CACHE / f"{original.stem}_partial.pkl",
-                   scan=not args.all_frames, court_every_s=args.court_every)
+                   scan=not args.all_frames, court_every_s=args.court_every, fixed_H=fixed_H)
+        if fixed_H is None and not any(H is not None for H in tr["Hs"]):
+            print("The court was not recognised in any frame. For a fixed camera, mark it by hand once:\n"
+                  f"  drag the video onto calibrate.bat, then analyse again.")
         cache.write_bytes(pickle.dumps(tr))
 
     hands = {"near": args.near_hand, "far": args.far_hand}

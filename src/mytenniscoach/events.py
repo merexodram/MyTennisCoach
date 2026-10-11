@@ -166,7 +166,7 @@ def _sse(t: np.ndarray, v: np.ndarray, deg: int):
 
 
 def find_bounce(ball_px: np.ndarray, Hs: list, start: int, end: int, fps: float,
-                target_sign: float, hints: list[int], scale: float) -> int | None:
+                target_sign: float, hints: list[int], scale: float, latest: int | None = None) -> int | None:
     """Where the ball lands between two hits.
 
     Before and after the bounce the ball flies on two smooth arcs. Fit the
@@ -194,6 +194,8 @@ def find_bounce(ball_px: np.ndarray, Hs: list, start: int, end: int, fps: float,
         if v_in - v_out < 0.8 * scale:
             continue                                     # not a bounce: no upward kick
         i = int(fr[k - 1] if y[k - 1] >= y[k] else fr[k])   # the lower of the two points
+        if latest is not None and i > latest:
+            break                                        # the path after this belongs to another shot
         bx, by = court.to_court(Hs[i], [ball_px[i]])[0]
         depth = by * target_sign
         if not (0.2 < depth < court.HALF_LENGTH + 5.0 and abs(bx) < court.HALF_DOUBLES + 4.0):
@@ -250,9 +252,9 @@ def build_shots(ball_px: np.ndarray, players: list[dict], Hs: list, fps: float, 
         target_sign = -1.0 if side == "near" else 1.0
         # A ball lands within about 0.8 s of a serve and 1.6 s of any other stroke.
         # Anything later belongs to another shot.
-        nxt = min(nxt, f + int(fps * (0.8 if s.stroke == "serve" else 1.6)))
+        latest = f + int(fps * (0.8 if s.stroke == "serve" else 1.6))
         b_f = find_bounce(ball_px, Hs, f, nxt, fps, target_sign,
-                          far_bounces if side == "near" else [], scale)
+                          far_bounces if side == "near" else [], scale, latest=latest)
         H = Hs[b_f] if b_f is not None else None
         if b_f is not None and H is not None:
             bx, by = court.to_court(H, [ball_px[b_f]])[0]
