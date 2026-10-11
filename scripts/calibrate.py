@@ -21,6 +21,12 @@ every rally. Wear something different from your opponent.
 
 The result is saved next to the video as <name>.court.json and used
 automatically by analyze.bat.
+
+A magnifier in a corner shows the spot under the mouse four times enlarged.
+A click on a near-half point is moved onto the real crossing of the two
+painted lines next to it when one is found; far-half points stay where you
+click, so use the magnifier there. A point that disagrees with the others is ringed in
+red with "check": press U until it is undone and click it again, or skip it.
 """
 import sys
 from pathlib import Path
@@ -36,11 +42,16 @@ from mytenniscoach import court, video  # noqa: E402
 # Easiest points first: the near half is large on screen.
 ME = "me"
 ORDER = [2, 3, 5, 7, 10, 11, 13, court.NET_CENTRE, 1, 0, 6, 4, 9, 8, 12, ME]
+# Near-half points are snapped onto the painted lines. On the far half the net
+# tape runs through the picture and would be mistaken for a court line.
+SNAP = {2, 3, 5, 7, 10, 11, 13}
 WINDOW = "MyTennisCoach court calibration"
 
 
-def draw(frame: np.ndarray, points: dict, scale: float, me_point=None) -> np.ndarray:
+def draw(frame: np.ndarray, points: dict, scale: float, me_point=None, cursor=None) -> np.ndarray:
     img = frame.copy()
+    errors = court.point_errors(points)
+    limit = max(6.0, frame.shape[1] / 1920 * 8.0)
     H, err = court.fit_points(points)
     if H is not None:
         ip = court.to_image(H, court.KEYPOINTS_M)
@@ -48,11 +59,34 @@ def draw(frame: np.ndarray, points: dict, scale: float, me_point=None) -> np.nda
             cv2.line(img, tuple(map(int, ip[a])), tuple(map(int, ip[b])), (0, 255, 0), 2, cv2.LINE_AA)
         net = court.to_image(H, [(-court.HALF_DOUBLES, 0.0), (court.HALF_DOUBLES, 0.0)])
         cv2.line(img, tuple(map(int, net[0])), tuple(map(int, net[1])), (255, 0, 255), 2, cv2.LINE_AA)
-    for (x, y) in points.values():
+    for key, (x, y) in points.items():
+        bad = errors.get(key, 0.0) > limit                  # disagrees with the other points: probably misclicked
         cv2.circle(img, (int(x), int(y)), 6, (0, 0, 255), -1, cv2.LINE_AA)
+        if bad:
+            cv2.circle(img, (int(x), int(y)), 18, (0, 0, 255), 3, cv2.LINE_AA)
+            cv2.putText(img, "check", (int(x) + 20, int(y) - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
     if me_point is not None:
         cv2.circle(img, (int(me_point[0]), int(me_point[1])), 14, (0, 255, 255), 3, cv2.LINE_AA)
-    return cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale != 1 else img
+    out = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale != 1 else img
+    if cursor is not None:                                  # magnifier: 4x view of what is under the mouse
+        cx, cy = int(cursor[0]), int(cursor[1])
+        r = 30
+        x0, y0 = max(0, cx - r), max(0, cy - r)
+        patch = frame[y0: cy + r, x0: cx + r]
+        if patch.size:
+            lens = cv2.resize(patch, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+            lh, lw = lens.shape[:2]
+            mx, my = (cx - x0) * 4, (cy - y0) * 4
+            cv2.line(lens, (mx - 14, my), (mx + 14, my), (0, 255, 255), 1)
+            cv2.line(lens, (mx, my - 14), (mx, my + 14), (0, 255, 255), 1)
+            cv2.rectangle(lens, (0, 0), (lw - 1, lh - 1), (0, 255, 255), 2)
+            # Put it in the corner away from the mouse.
+            ox = 10 if cx * scale > out.shape[1] / 2 else out.shape[1] - lw - 10
+            oy = 10 if cy * scale > out.shape[0] / 2 else out.shape[0] - lh - 10
+            if ox >= 0 and oy >= 0 and oy + lh <= out.shape[0] and ox + lw <= out.shape[1]:
+                out = out.copy()
+                out[oy: oy + lh, ox: ox + lw] = lens
+    return out
 
 
 def main() -> None:
@@ -71,8 +105,14 @@ def main() -> None:
     idx = 0
     clicked: list = []
     cv2.namedWindow(WINDOW)
-    cv2.setMouseCallback(WINDOW, lambda ev, x, y, *_: clicked.append((x / scale, y / scale))
-                         if ev == cv2.EVENT_LBUTTONDOWN else None)
+    cursor: list = [None]
+
+    def on_mouse(ev, x, y, *_):
+        cursor[0] = (x / scale, y / scale)
+        if ev == cv2.EVENT_LBUTTONDOWN:
+            clicked.append((x / scale, y / scale))
+
+    cv2.setMouseCallback(WINDOW, on_mouse)
     while True:
         key_name = ORDER[idx] if idx < len(ORDER) else None
         if key_name == ME:
@@ -81,7 +121,7 @@ def main() -> None:
             label = court.POINT_NAMES[key_name] if key_name is not None else "all done, press Enter"
         cv2.setWindowTitle(WINDOW, f"Click: {label}   |   S skip, U undo, N other frame, Enter save, Esc quit   "
                                    f"[{len(points)} set]")
-        cv2.imshow(WINDOW, draw(frame, points, scale, me["point"] if me else None))
+        cv2.imshow(WINDOW, draw(frame, points, scale, me["point"] if me else None, cursor[0]))
         k = cv2.waitKey(30) & 0xFF
         if clicked and key_name == ME:
             me = {"frame": int(at), "fps": float(info.fps), "point": [float(v) for v in clicked.pop()]}
@@ -89,7 +129,10 @@ def main() -> None:
             history.append(ME)
             idx += 1
         elif clicked and key_name is not None:
-            points[key_name] = clicked.pop()
+            spot = clicked.pop()
+            if key_name in SNAP:
+                spot, _ = court.snap_to_lines(frame, spot)
+            points[key_name] = spot
             clicked.clear()
             history.append(key_name)
             idx += 1

@@ -5,8 +5,10 @@ network, which makes a two-hour session an overnight job. A free Colab T4 GPU
 should be several times faster. Only the tracking pass moves to the cloud;
 everything else stays at home.
 
-Status: the notebook has not been run on Colab yet. The `--track-only` path it
-uses is tested locally.
+Status: the first Colab run finished without producing anything, because the
+`in` folder on Drive was empty; the notebook did not say so. It now stops with
+a clear message, offers to upload the files directly, and downloads the result
+at the end. A complete run on Colab is still to be confirmed.
 
 ## Steps
 

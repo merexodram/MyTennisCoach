@@ -206,3 +206,64 @@ def far_zoom_rect(H: np.ndarray, width: int, height: int, min_w: int = 640):
     rx = int(round(min(max(cx - w / 2, 0), width - w)))
     ry = int(round(min(max(cy - h / 2, 0), height - h)))
     return rx, ry, int(round(w)), int(round(h))
+
+
+def snap_to_lines(frame: np.ndarray, point, radius: int | None = None):
+    """Move a clicked court point onto the real crossing of the two painted lines near it.
+
+    A click is a few pixels off, more so on a scaled-down picture, and a few
+    pixels at the far end of the court are metres. The lines themselves are
+    in the picture, so use them: find the two lines around the click and
+    return where they cross. Returns the click unchanged if no clear crossing
+    is found within reach.
+    """
+    h, w = frame.shape[:2]
+    r = radius or max(18, int(round(w / 1920 * 30)))
+    x, y = int(round(point[0])), int(round(point[1]))
+    x0, y0, x1, y1 = max(0, x - r), max(0, y - r), min(w, x + r + 1), min(h, y + r + 1)
+    if x1 - x0 < 12 or y1 - y0 < 12:
+        return (float(point[0]), float(point[1])), False
+    gray = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    # Lines are thin and brighter than the court around them.
+    k = max(5, (r // 3) | 1)
+    top = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
+    _, mask = cv2.threshold(top, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if mask.mean() < 2 or mask.mean() > 120:
+        return (float(point[0]), float(point[1])), False
+    lines = cv2.HoughLines(mask, 1, np.pi / 180, max(8, int(0.5 * r)))
+    if lines is None:
+        return (float(point[0]), float(point[1])), False
+    picked: list = []
+    for rho, theta in lines[:, 0, :]:
+        if all(min(abs(theta - t), np.pi - abs(theta - t)) > np.radians(12) for _, t in picked):
+            picked.append((rho, theta))
+        if len(picked) == 2:
+            break
+    if len(picked) < 2:
+        return (float(point[0]), float(point[1])), False
+    ys, xs = np.nonzero(mask)
+    fitted = []
+    for rho, theta in picked:                       # refit each line through the middle of its paint
+        d = np.abs(xs * np.cos(theta) + ys * np.sin(theta) - rho)
+        sel = d < 3.0
+        if sel.sum() < 6:
+            return (float(point[0]), float(point[1])), False
+        vx, vy, px, py = cv2.fitLine(np.column_stack([xs[sel], ys[sel]]).astype(np.float32), cv2.DIST_L2, 0, 0.01, 0.01).ravel()
+        fitted.append((vx, vy, px, py))
+    (a1, b1, p1, q1), (a2, b2, p2, q2) = fitted
+    det = a1 * b2 - b1 * a2
+    if abs(det) < 1e-6:
+        return (float(point[0]), float(point[1])), False
+    t = ((p2 - p1) * b2 - (q2 - q1) * a2) / det
+    cx, cy = p1 + t * a1 + x0, q1 + t * b1 + y0
+    if np.hypot(cx - point[0], cy - point[1]) > 0.8 * r:
+        return (float(point[0]), float(point[1])), False
+    return (float(cx), float(cy)), True
+
+
+def point_errors(points: dict) -> dict:
+    """How far each clicked point lies from the fitted court, in pixels."""
+    H, _ = fit_points(points)
+    if H is None:
+        return {}
+    return {k: float(np.linalg.norm(to_image(H, [_court_xy(k)])[0] - np.float32(points[k]))) for k in points}

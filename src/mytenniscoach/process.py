@@ -303,6 +303,13 @@ def main() -> None:
     if args.track_only:
         print(f"Tracks saved: {cache}")
         return
+    # The court file may have been redone since the tracking: positions in the
+    # picture stay valid, only their mapping to the court changes.
+    if cal is not None and cal.exists():
+        now_H, now_err = court.load_calibration(cal, info.width, info.height)
+        if now_H is not None:
+            tr["Hs"] = [now_H if H is not None else None for H in tr["Hs"]]
+            print(f"Court mapping taken from {cal.name} as it is now (fit error {now_err:.1f} px)")
 
     hands = {"near": args.near_hand, "far": args.far_hand}
     ball_px, chosen, shots = analyse(info, tr, hands, doubles=args.doubles)
