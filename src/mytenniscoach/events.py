@@ -198,7 +198,8 @@ def find_bounce(ball_px: np.ndarray, Hs: list, start: int, end: int, fps: float,
             break                                        # the path after this belongs to another shot
         bx, by = court.to_court(Hs[i], [ball_px[i]])[0]
         depth = by * target_sign
-        if not (0.2 < depth < court.HALF_LENGTH + 5.0 and abs(bx) < court.HALF_DOUBLES + 4.0):
+        # A ball that maps far outside the court is almost always still in the air.
+        if not (0.2 < depth < court.HALF_LENGTH + 3.0 and abs(bx) < court.HALF_DOUBLES + 2.5):
             continue
         if any(abs(i - h) <= 2 for h in hints):
             sse *= 0.7                                   # agrees with a direction reversal

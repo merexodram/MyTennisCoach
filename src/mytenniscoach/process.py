@@ -31,7 +31,7 @@ def pick_device(name: str) -> str:
 
 def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkpoint: Path | None = None,
           scan: bool = True, batch: int | None = None, min_scan_s: float = 60.0,
-          fixed_H: np.ndarray | None = None) -> dict:
+          fixed_H: np.ndarray | None = None, far_zoom: str = "auto") -> dict:
     """Court, ball and players for every frame worth looking at.
 
     1. Scan: short bursts through the ball network find where a ball is in play.
@@ -47,7 +47,17 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
         torch.backends.cudnn.benchmark = True              # fixed input sizes: let cuDNN pick its fastest method
     # With a calibrated fixed camera the court is known: no court network needed.
     cd = None if fixed_H is not None else court.CourtDetector(device)
-    bt, pf = ball.BallTracker(device), players.PlayerFinder(device)
+    bt, pf = ball.BallTracker(device), players.PlayerFinder(device, imgsz=1280 if info.width > 1400 else 960)
+    # Low fixed camera: look at the far half a second time, enlarged.
+    zoom = None
+    if fixed_H is not None and far_zoom != "off":
+        zoom = court.far_zoom_rect(fixed_H, info.width, info.height)
+        if zoom is None and far_zoom == "on":
+            log("  far-half zoom not needed: the far half is already large in this picture")
+    bt_far = ball.BallTracker(device) if zoom is not None else None
+    if zoom is not None:
+        log(f"  low camera: the far half is also tracked enlarged ({info.width / zoom[2]:.1f}x), "
+            "which roughly doubles the ball-tracking time")
     empty = np.zeros((0, 5), np.float32)
     clock = {"scan": 0.0, "decode": 0.0, "court": 0.0, "ball": 0.0, "players": 0.0}
 
@@ -84,9 +94,14 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
         i = max(a, state["next"])
         done += i - a
         bt.reset()
+        if bt_far is not None:
+            bt_far.reset()
         H, err = (fixed_H, 0.0) if fixed_H is not None else (None, float("inf"))
         if i > a:                                          # resuming inside a stretch
-            bt.infer(reader.read(max(a, i - 2), i - max(a, i - 2)))
+            warm = reader.read(max(a, i - 2), i - max(a, i - 2))
+            bt.infer(warm)
+            if bt_far is not None:
+                bt_far.infer(warm, zoom)
             if fixed_H is None:
                 H, err = tr["Hs"][i - 1], tr["court_err"][i - 1]
         while i < b:
@@ -108,6 +123,9 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
             t = time.time()
             if in_view:
                 blobs = bt.infer(frames)
+                if bt_far is not None:                     # enlarged candidates first: they are the sharper ones
+                    far = bt_far.infer(frames, zoom)
+                    blobs = [((f or []) + (b or [])) or None for f, b in zip(far, blobs)]
             else:                                          # close-up or replay: nothing to track here
                 blobs = [None] * len(frames)
                 bt.reset()
@@ -182,9 +200,11 @@ def main() -> None:
     ap.add_argument("--all-frames", action="store_true", help="track every frame instead of only where a ball is in play")
     ap.add_argument("--full-video", action="store_true",
                     help="annotated video of the whole recording, not only the stretches with play")
-    ap.add_argument("--no-proxy", action="store_true", help="analyse the original file, not a 720p working copy")
+    ap.add_argument("--no-proxy", action="store_true", help="analyse the original file, not a working copy")
     ap.add_argument("--court-file", default=None,
                     help="court points clicked with calibrate.bat (default: <video name>.court.json next to the video)")
+    ap.add_argument("--far-zoom", default="auto", choices=["auto", "on", "off"],
+                    help="track the far half a second time, enlarged (auto: only for a low calibrated camera)")
     ap.add_argument("--court-every", type=float, default=0.2,
                     help="seconds between court detections (use 2 or more for a fixed camera)")
     args = ap.parse_args()
@@ -192,8 +212,8 @@ def main() -> None:
     original = Path(args.video).resolve()
     CACHE.mkdir(parents=True, exist_ok=True)
     cache = CACHE / f"{original.stem}_tracks.pkl"
-    # Work on a 720p copy when the recording is larger or faster than needed.
-    path = original if args.no_proxy else proxy.make(original, CACHE / f"{original.stem}_proxy.mp4")
+    # Work on a 1080p copy when the recording is larger or faster than needed.
+    path = original if args.no_proxy else proxy.make(original, CACHE / f"{original.stem}_work.mp4")
     info = video.probe(path)
 
     if cache.exists() and not args.redo:
@@ -208,7 +228,8 @@ def main() -> None:
             fixed_H, cal_err = court.load_calibration(cal, info.width, info.height)
             print(f"Court from {cal.name} (fixed camera, fit error {cal_err:.1f} px)")
         tr = track(path, device, checkpoint=CACHE / f"{original.stem}_partial.pkl",
-                   scan=not args.all_frames, court_every_s=args.court_every, fixed_H=fixed_H)
+                   scan=not args.all_frames, court_every_s=args.court_every, fixed_H=fixed_H,
+                   far_zoom=args.far_zoom)
         if fixed_H is None and not any(H is not None for H in tr["Hs"]):
             print("The court was not recognised in any frame. For a fixed camera, mark it by hand once:\n"
                   f"  drag the video onto calibrate.bat, then analyse again.")

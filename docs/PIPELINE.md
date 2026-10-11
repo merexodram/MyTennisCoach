@@ -41,9 +41,21 @@ the baseline, court marked from 10 hand-picked points): ball tracked in 71 % of
 frames, both players found in every frame, 5 hits detected.
 
 A low camera squeezes the far half of the court into very few pixels (51 pixel
-rows for 12 m in that clip, so one pixel is 0.2 to 0.5 m of depth). Depth and
-in/out calls on the far side are therefore rough. Mounting the camera higher
-is the only real cure.
+rows for 12 m in that clip at 720p). Two things in the pipeline work against
+that, and a third is up to the camera:
+
+1. The working copy is 1080p, not 720p.
+2. **Far-half zoom.** With a calibrated low camera, the ball network looks at
+   the far half a second time, enlarged (2x in that clip). On the 8 s test this
+   raised ball coverage from 71 % to 99 %; where both views saw the ball they
+   agreed within about 1 pixel. It roughly doubles the ball-tracking time.
+   `--far-zoom off` disables it.
+3. Camera height. Depth on the far side (how deep a ball landed, in or out)
+   still depends on how many pixel rows the far half gets. Higher is better;
+   4K recording helps the far player's technique clips, not the depth.
+
+Hit and bounce detection on the far side from a low camera is still weak: the
+ball's up-and-down movement there is only a few pixels.
 
 ## What to trust, as of the first clips
 

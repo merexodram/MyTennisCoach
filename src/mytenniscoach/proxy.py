@@ -1,8 +1,9 @@
 """Working copy of a recording at analysis size.
 
-The networks look at 640x360 images, so decoding 4K at 60 fps for every
-frame is wasted time. The pipeline works on a 720p copy at 25 to 30 fps with
-a keyframe every second (cheap to seek in). The original is only needed later
+Decoding 4K at 60 fps for every frame is wasted time. The pipeline works on a
+copy of at most 1080p at 25 to 30 fps with a keyframe every second (cheap to
+seek in). 1080p rather than 720p because the far half of the court and the far
+player are small, and those pixels matter. The original is only needed later
 for cutting full-quality technique clips.
 """
 from __future__ import annotations
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from . import render, video
 
-MAX_HEIGHT = 720
+MAX_HEIGHT = 1080
 MAX_FPS = 32.0
 
 

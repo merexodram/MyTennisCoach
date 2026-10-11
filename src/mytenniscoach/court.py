@@ -155,3 +155,31 @@ def load_calibration(path: Path, width: int, height: int):
     for k, (x, y) in data["points"].items():
         points[k if k == NET_CENTRE else int(k)] = (x * sx, y * sy)
     return fit_points(points)
+
+
+def far_zoom_rect(H: np.ndarray, width: int, height: int, min_w: int = 640):
+    """Image rectangle (x, y, w, h, 16:9) around the far half of the court, or None.
+
+    From a low camera the far half covers only a thin strip of the picture, and
+    the ball network, which sees the whole frame shrunk to 640x360, loses the
+    ball there. Looking at that strip a second time, enlarged, recovers it.
+    Returns None when the far half is already large enough (a high camera).
+    """
+    m = HALF_DOUBLES + 2.5
+    pts = to_image(H, [(-m, 0.0), (m, 0.0), (-m, -(HALF_LENGTH + 4.0)), (m, -(HALF_LENGTH + 4.0))])
+    net_y = float(to_image(H, [(0.0, 0.0)])[0][1])
+    base_y = float(to_image(H, [(0.0, -HALF_LENGTH)])[0][1])
+    if abs(net_y - base_y) > 0.2 * height:
+        return None
+    x0, x1 = float(pts[:, 0].min()), float(pts[:, 0].max())
+    y0, y1 = float(pts[:, 1].min()), float(pts[:, 1].max())
+    strip = y1 - y0
+    y0 -= 2.5 * strip                                  # air above the far court: lobs, serves, the toss
+    y1 += 0.3 * strip
+    w = max(float(min_w), x1 - x0, (y1 - y0) * 16 / 9)
+    w = min(w, float(width))
+    h = w * 9 / 16
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    rx = int(round(min(max(cx - w / 2, 0), width - w)))
+    ry = int(round(min(max(cy - h / 2, 0), height - h)))
+    return rx, ry, int(round(w)), int(round(h))

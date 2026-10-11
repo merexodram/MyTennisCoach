@@ -32,7 +32,7 @@ class BallTracker:
         self.buf.clear()
 
     @torch.no_grad()
-    def infer(self, frames: list[np.ndarray]) -> list:
+    def infer(self, frames: list[np.ndarray], rect=None) -> list:
         """Ball candidates for a run of consecutive frames, in one batch.
 
         Each result is a list of up to 4 blobs (x, y, score), strongest first,
@@ -40,10 +40,12 @@ class BallTracker:
         """
         if not frames:
             return []
-        h, w = frames[0].shape[:2]
+        # rect = (x, y, w, h): look only at that part of the picture, enlarged.
+        ox, oy, w, h = rect if rect is not None else (0, 0, frames[0].shape[1], frames[0].shape[0])
         stacks, slots = [], []
         for k, frame in enumerate(frames):
-            small = cv2.resize(frame, (NET_W, NET_H))
+            view = frame if rect is None else frame[oy: oy + h, ox: ox + w]
+            small = cv2.resize(view, (NET_W, NET_H), interpolation=cv2.INTER_AREA)
             if len(self.buf) == 2:
                 stacks.append(np.concatenate((small, self.buf[1], self.buf[0]), axis=2))
                 slots.append(k)
@@ -64,7 +66,10 @@ class BallTracker:
                 print(f"  GPU memory full: ball network batch reduced to {self.max_batch}")
                 continue
             for k, heat in zip(slots[done: done + len(part)], heat_all):
-                out[k] = self._blobs(heat, w, h)
+                blobs = self._blobs(heat, w, h)
+                if blobs and rect is not None:
+                    blobs = [(x + ox, y + oy, score) for x, y, score in blobs]
+                out[k] = blobs
             done += len(part)
         return out
 
@@ -131,7 +136,7 @@ def _as_candidates(track: list) -> list[list]:
     return out
 
 
-def resolve(track: list, max_jump_px: float, static_px: float = 12.0) -> list:
+def resolve(track: list, max_jump_px: float, static_px: float = 4.0) -> list:
     """Pick one ball position per frame from the candidates.
 
     1. Drop spots that stay put for a long time (a logo, a line mark, a ball
