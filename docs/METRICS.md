@@ -124,7 +124,7 @@ calibrate it.
 
 | Metric | Property | Unit | Better | Source | Min. sample | Note |
 |---|---|---|---|---|---|---|
-| Forehand net clearance | `fh_net_clear_m` | m | – | measured, one-camera estimate | 5 | about 0.6-1.2 m is the safe window for rally balls |
+| Forehand net clearance | `fh_net_clear_m` | m | – | measured, one-camera estimate | 5 | higher = more margin over the net, lower = flatter |
 | Backhand net clearance | `bh_net_clear_m` | m | – | measured, one-camera estimate | 5 |  |
 | Forehand highest point | `fh_apex_m` | m | – | measured, one-camera estimate | 5 |  |
 | Backhand highest point | `bh_apex_m` | m | – | measured, one-camera estimate | 5 |  |

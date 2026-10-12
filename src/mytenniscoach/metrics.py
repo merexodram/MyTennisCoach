@@ -88,7 +88,7 @@ METRICS: list[Metric] = [
     _m("avg_depth_m", "Groundstrokes", "Average landing distance from the net", "m", "high", "auto", 10),
     # --- Ball flight (3D from one camera) -------------------------------------
     _m("fh_net_clear_m", "Ball flight", "Forehand net clearance", "m", None, "estimate", 5,
-       "about 0.6-1.2 m is the safe window for rally balls"),
+       "higher = more margin over the net, lower = flatter"),
     _m("bh_net_clear_m", "Ball flight", "Backhand net clearance", "m", None, "estimate", 5),
     _m("fh_apex_m", "Ball flight", "Forehand highest point", "m", None, "estimate", 5),
     _m("bh_apex_m", "Ball flight", "Backhand highest point", "m", None, "estimate", 5),
