@@ -41,7 +41,7 @@ class CourtDetector:
     def __init__(self, device: str = "cpu"):
         self.device = device
         self.model = upstream.court_net()
-        self.model.load_state_dict(torch.load(upstream.weights("court_detector.pt"), map_location=device))
+        self.model.load_state_dict(torch.load(upstream.weights("court_detector.pt"), map_location=device, weights_only=True))
         self.model.to(device).eval()               # full precision: it only runs a few times a second
 
     @torch.no_grad()

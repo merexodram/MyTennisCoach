@@ -18,7 +18,7 @@ class BallTracker:
     def __init__(self, device: str = "cpu"):
         self.device = device
         self.model = upstream.ball_net()
-        self.model.load_state_dict(torch.load(upstream.weights("tracknet_ball.pt"), map_location=device))
+        self.model.load_state_dict(torch.load(upstream.weights("tracknet_ball.pt"), map_location=device, weights_only=True))
         self.model.to(device).eval()
         # Half precision is about twice as fast on a GPU, but on some cards it
         # overflows and the network sees nothing. It is switched on only after

@@ -1,26 +1,77 @@
-# Footage, weights and databases never go to GitHub
+# This repository is PUBLIC. Nothing personal goes into it:
+# footage, pictures of people, calibration clicks, player settings, reviews,
+# statistics, databases, logs, credentials. All of that stays on the laptop.
+# Before publishing, run: python scripts/check_public.py
+
+# Personal data folders
 data/
-models/
 outputs/
-*.mp4
-*.mov
-*.avi
-*.mkv
-*.pt
-*.pth
-*.pkl
+models/
+
+# Footage (any case: action cams write .MP4) and camera sidecar files
+*.[mM][pP]4
+*.[mM][oO][vV]
+*.[aA][vV][iI]
+*.[mM][kK][vV]
+*.[mM]4[vV]
+*.[wW][eE][bB][mM]
+*.[lL][rR][vV]
+*.[tT][hH][mM]
+*.insv
+*.insp
+*.360
+
+# Pictures (strips, screenshots); docs/img/ is the only place for published images
+*.[jJ][pP][gG]
+*.[jJ][pP][eE][gG]
+*.[pP][nN][gG]
+*.[hH][eE][iI][cC]
+*.gif
+!docs/img/**
+
+# Results and personal settings, wherever they end up
 *.duckdb
 *.duckdb.wal
+*.pkl
+*.court.json
+player.json
+coach_input.json
+review.md
+pack.md
+pack.json
+*_log.txt
+*.html
+links.txt
+*.bundle
+
+# Weights
+*.pt
+*.pth
+*.onnx
+
+# Credentials, never
+.env
+.env.*
+*.pem
+*.key
+*.p12
+cookies*.txt
+client_secret*.json
+credentials*.json
+token*.json
+service_account*.json
 
 # Python
 .venv/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+.pytest_cache/
 runs/
 
 # OS / editors
 Thumbs.db
+desktop.ini
 .DS_Store
 .vscode/
 .idea/

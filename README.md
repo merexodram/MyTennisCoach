@@ -66,6 +66,18 @@ to process it, and see [docs/PIPELINE.md](docs/PIPELINE.md) for options and
 `scripts/report.py` for statistics.
 Full prerequisites are in [docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md).
 
+## Privacy
+
+This repository is public, so it holds code and documentation only. Footage,
+pictures, court clicks, player settings, statistics, reviews, databases, logs
+and credentials stay on the laptop: `data/`, `outputs/` and `models/` are never
+committed, and `.gitignore` blocks those file types wherever they are.
+`scripts/check_public.py` checks files, history and commit messages for
+personal data and secrets; it also reads a local list of private words from
+`data/private_terms.txt` (never published). GitHub runs the same check on
+every push (`.github/workflows/privacy.yml`).
+
+
 ## Repository layout
 
 ```
@@ -79,6 +91,7 @@ coach.bat        after analysing: coach pack, store the review, update metrics, 
 compare.bat      compare any two sessions in Obsidian (outputs\dashboard.html compares any pair in the browser)
 docs/METRICS.md  the ~100 session metrics, professional-statistics style, and where each comes from
 tests/           python -m pytest tests
+.github/         privacy check on every push
 src/mytenniscoach/   the pipeline: court, ball, players, events, db, render, process
 third_party/     upstream repositories as pinned submodules
 data/            footage, clips and tennis.duckdb   (local only, git-ignored)
