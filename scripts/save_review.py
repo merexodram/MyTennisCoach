@@ -53,6 +53,11 @@ def main() -> None:
             print("No sessions yet.")
             return
         args.file = str(ROOT / "outputs" / "coach" / f"session_{args.session:04d}" / "review.md")
+        told = Path(args.file).with_name("coach_input.json")
+        if told.exists():
+            from mytenniscoach import metrics
+            done = metrics.apply_coach_input(con, args.session, told)
+            print(f"From the review chat: {', '.join(done) if done else 'nothing new'}")
         if not Path(args.file).exists():
             print(f"No review written yet for session {args.session} (expected {args.file}).")
             return

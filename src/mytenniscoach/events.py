@@ -34,6 +34,7 @@ class Shot:
     confidence: float = 0.5
     rally: int = 0
     seq: int = 0
+    flight: object = None            # flight.Flight when the 3D fit worked
 
 
 def _vy(y: np.ndarray, half: int = 2) -> np.ndarray:

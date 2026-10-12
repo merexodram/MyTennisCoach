@@ -73,6 +73,28 @@ ALTER TABLE pose_metrics ADD COLUMN IF NOT EXISTS shoulder_turn_deg DOUBLE;    -
 ALTER TABLE pose_metrics ADD COLUMN IF NOT EXISTS off_hand_on_racket BOOLEAN;  -- at contact
 ALTER TABLE pose_metrics ADD COLUMN IF NOT EXISTS pose_frames INTEGER;         -- frames with a usable pose
 
+-- Ball flight in 3D (flight.py) and movement, added with the metrics layer.
+ALTER TABLE shots ADD COLUMN IF NOT EXISTS net_clearance_m DOUBLE;   -- height above the net tape
+ALTER TABLE shots ADD COLUMN IF NOT EXISTS apex_m DOUBLE;            -- highest point of the flight
+ALTER TABLE shots ADD COLUMN IF NOT EXISTS spin_rpm DOUBLE;          -- + topspin, - slice (experimental)
+ALTER TABLE shots ADD COLUMN IF NOT EXISTS bounce_angle_deg DOUBLE;  -- steepness of the landing
+ALTER TABLE shots ADD COLUMN IF NOT EXISTS hit_height_m DOUBLE;      -- ball height at contact (from the flight)
+ALTER TABLE shots ADD COLUMN IF NOT EXISTS flight_fit_px DOUBLE;     -- fit error of the flight, pixels
+ALTER TABLE points ADD COLUMN IF NOT EXISTS me_distance_m DOUBLE;    -- how far I ran in the rally
+ALTER TABLE points ADD COLUMN IF NOT EXISTS me_behind_baseline_m DOUBLE; -- my average position behind my baseline
+ALTER TABLE points ADD COLUMN IF NOT EXISTS seconds DOUBLE;
+
+-- One row per session and metric (metrics.py). source: 'auto' measured from
+-- the video, 'coach' told to the coach in the review chat.
+CREATE TABLE IF NOT EXISTS session_metrics (
+    session_id INTEGER NOT NULL,
+    metric     VARCHAR NOT NULL,
+    value      DOUBLE,
+    n          INTEGER,                  -- how many strokes/points the value rests on
+    source     VARCHAR NOT NULL,
+    PRIMARY KEY (session_id, metric)
+);
+
 CREATE TABLE IF NOT EXISTS clips (
     clip_id      INTEGER PRIMARY KEY,
     session_id   INTEGER NOT NULL REFERENCES sessions(session_id),

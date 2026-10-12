@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import activity, ball, clips, court, db, events, identity, players, proxy, render, technique, video
+from . import activity, ball, clips, court, db, events, flight, identity, players, proxy, render, technique, video
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "outputs"
@@ -207,6 +207,38 @@ def summary(info, tr, ball_px, chosen, shots) -> dict:
     }
 
 
+def movement(chosen: list, shots: list, me_by_rally: dict, fps: float) -> dict:
+    """How far I ran in each rally and how far behind my baseline I stayed.
+
+    Positions are sampled every 0.2 s and median-smoothed; steps faster than
+    9 m/s are tracking jumps and are left out.
+    """
+    out: dict = {}
+    for rally in sorted({s.rally for s in shots}):
+        rs = [s for s in shots if s.rally == rally]
+        side = me_by_rally.get(rally, "near")
+        a, b = rs[0].frame, (rs[-1].bounce_frame or rs[-1].frame) + int(0.5 * fps)
+        pts = [(f, chosen[f][side][1]) for f in range(max(0, a), min(b, len(chosen)))
+               if chosen[f].get(side) is not None and chosen[f][side][1] is not None]
+        if len(pts) < fps:
+            continue
+        step = max(1, int(round(0.2 * fps)))
+        xy = np.array([p[1] for p in pts], dtype=float)
+        fr = np.array([p[0] for p in pts])
+        k = 2
+        smooth = np.array([np.median(xy[max(0, i - k): i + k + 1], axis=0) for i in range(len(xy))])
+        idx = np.arange(0, len(smooth), step)
+        d = 0.0
+        for i, j in zip(idx[:-1], idx[1:]):
+            dist = float(np.hypot(*(smooth[j] - smooth[i])))
+            dt = (fr[j] - fr[i]) / fps
+            if dt > 0 and dist / dt < 9.0:
+                d += dist
+        behind = float(np.mean(np.abs(smooth[:, 1]) - court.HALF_LENGTH))
+        out[rally] = {"distance_m": round(d, 1), "behind_baseline_m": round(behind, 2)}
+    return out
+
+
 def load_player() -> dict:
     """data/player.json: who "me" is, so it need not be typed every time."""
     f = ROOT / "data" / "player.json"
@@ -233,12 +265,16 @@ def main() -> None:
     ap.add_argument("--height", type=float, default=player.get("height_cm", 178.0), help="my height in cm (scales the pose)")
     ap.add_argument("--no-clips", action="store_true", help="do not keep short clips of flagged strokes")
     ap.add_argument("--no-technique", action="store_true", help="skip pose and technique measurements")
+    ap.add_argument("--no-flight", action="store_true", help="skip the 3D ball flight fit (about 1 s per shot on a laptop CPU)")
     ap.add_argument("--prepare", action="store_true",
                     help="only make the working copy and collect what a cloud GPU run needs in outputs/for_colab")
     ap.add_argument("--track-only", action="store_true",
                     help="only do the slow tracking pass and save it (for a cloud GPU); analyse later at home")
-    ap.add_argument("--kind", default="reference", choices=["match", "training", "reference"])
-    ap.add_argument("--source", default="broadcast", choices=["broadcast", "action_cam", "phone"])
+    ap.add_argument("--kind", default=None, choices=["match", "training", "reference"],
+                    help="default: 'reference' for broadcast footage, otherwise data/player.json 'default_kind' or 'training'")
+    ap.add_argument("--source", default=None, choices=["broadcast", "action_cam", "phone"],
+                    help="default: 'action_cam' when a court file was clicked (own camera), else 'broadcast'")
+    ap.add_argument("--date", default=None, help="day played, YYYY-MM-DD (default: the recording's file date)")
     ap.add_argument("--surface", default=None)
     ap.add_argument("--player", default=None)
     ap.add_argument("--opponent", default=None)
@@ -314,6 +350,15 @@ def main() -> None:
 
     hands = {"near": args.near_hand, "far": args.far_hand}
     ball_px, chosen, shots = analyse(info, tr, hands, doubles=args.doubles)
+    try:
+        if args.no_flight:
+            raise RuntimeError("--no-flight")
+        t0 = time.time()
+        n_fl = flight.analyse(shots, ball_px, tr["Hs"], info.fps, info.width, info.height)
+        print(f"Ball flight in 3D: {n_fl} of {sum(sh.bounce_frame is not None for sh in shots)} shots "
+              f"with a bounce ({time.time() - t0:.0f} s)")
+    except Exception as e:                       # an estimate must never stop the analysis
+        print(f"Ball flight in 3D skipped: {e}")
     print(f"Lines: {'doubles' if args.doubles else 'singles'} (side lines used for in/out)")
     s = summary(info, tr, ball_px, chosen, shots)
     print(f"Court in view: {s['court_view_frames']}/{s['frames']} frames")
@@ -370,21 +415,41 @@ def main() -> None:
                       f"{num(t.contact_reach_m, 2)} m out; knee {num(t.knee_flex_deg)} deg, elbow {num(t.elbow_angle_deg)} deg, "
                       f"shoulder turn {num(t.shoulder_turn_deg)} deg; stance {t.stance or '-'}")
 
+    own_camera = cal is not None and cal.exists()
+    source = args.source or ("action_cam" if own_camera else "broadcast")
+    kind = args.kind or ("reference" if source == "broadcast" else player.get("default_kind", "training"))
+    played_on = args.date
+    if played_on is None:
+        import datetime as _dt
+        played_on = _dt.date.fromtimestamp(original.stat().st_mtime).isoformat()
+    try:
+        moves = movement(chosen, shots, me_by_rally, info.fps)
+    except Exception as e:
+        moves = {}
+        print(f"Movement skipped: {e}")
+
     if not args.no_db:
         con = db.connect(args.db)
         info.path = original.with_name(name + original.suffix)   # the session belongs to the recording, not its copy
         sid = db.save_session(con, info, shots, {
-            "kind": args.kind, "source": args.source, "surface": args.surface, "player": args.player,
+            "kind": kind, "source": source, "surface": args.surface, "player": args.player,
             "opponent": args.opponent, "me_by_rally": me_by_rally, "technique": tech,
+            "movement": moves, "played_on": played_on,
             # How much the tracking saw: the coach needs this to know what the numbers are worth.
             "notes": json.dumps({"note": args.notes, "quality": {
                 "court_view_frames": s["court_view_frames"], "frames": s["frames"],
                 "ball_tracked_pct": round(s["ball_clean_pct"]), "near_found_pct": round(s["near_pct"]),
                 "far_found_pct": round(s["far_pct"]), "shots": s["shots"], "bounces_located": s["bounces"],
                 "technique_strokes": len(tech), "lines": "doubles" if args.doubles else "singles"}}),
-            "camera_view": "broadcast" if args.source == "broadcast" else "behind_baseline",
+            "camera_view": "broadcast" if source == "broadcast" else "behind_baseline",
         })
-        print(f"Saved as session {sid} in {args.db}")
+        print(f"Saved as session {sid} in {args.db} ({played_on}, {kind}, {source})")
+        try:
+            from . import metrics
+            n_m = metrics.store(con, sid)
+            print(f"Metrics: {n_m} filled automatically")
+        except Exception as e:
+            print(f"Metrics skipped: {e}")
         if not args.no_clips and not is_copy:
             n_clips = clips.cut(con, sid, original)
             print(f"Clips kept: {n_clips} (data\\clips\\session_{sid:04d})")

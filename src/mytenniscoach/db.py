@@ -31,12 +31,36 @@ def pipeline_version() -> str:
         return "unknown"
 
 
+def _forced(rally_shots, fast_kmh) -> bool:
+    """Was the last shot's error forced by the ball before it?
+
+    Professional statisticians judge this by eye. Rule used here: forced when the
+    incoming ball was among the fastest quarter of the session, or the hitter had
+    to play from well outside the singles line or far behind the baseline.
+    A return error after a serve that landed in is forced too.
+    """
+    from . import court
+    last = rally_shots[-1]
+    if len(rally_shots) < 2:
+        return False
+    prev = rally_shots[-2]
+    if prev.stroke == "serve" and prev.in_court:
+        return True
+    if fast_kmh is not None and prev.speed_kmh and prev.speed_kmh >= fast_kmh:
+        return True
+    if last.contact_xy_m is not None:
+        x, y = last.contact_xy_m
+        if abs(x) > court.HALF_SINGLES + 1.2 or abs(y) > court.HALF_LENGTH + 3.5:
+            return True
+    return False
+
+
 def save_session(con, info, shots, meta: dict) -> int:
     """Insert one processed video. Re-processing the same file replaces its rows."""
     old = con.execute("SELECT session_id FROM sessions WHERE video_file = ?", [str(info.path)]).fetchall()
     for (sid,) in old:
         con.execute("DELETE FROM pose_metrics WHERE shot_id IN (SELECT shot_id FROM shots WHERE session_id = ?)", [sid])
-        for table in ("clips", "reviews", "shots", "points", "sessions"):
+        for table in ("clips", "reviews", "session_metrics", "shots", "points", "sessions"):
             con.execute(f"DELETE FROM {table} WHERE session_id = ?", [sid])
 
     sid = _next_id(con, "sessions", "session_id")
@@ -51,6 +75,10 @@ def save_session(con, info, shots, meta: dict) -> int:
     me_default = meta.get("me_side", "near")
     me_by_rally = meta.get("me_by_rally", {})
     technique = meta.get("technique", {})
+    movement = meta.get("movement", {})
+    fps = info.fps or 30.0
+    speeds = sorted(s.speed_kmh for s in shots if s.speed_kmh)
+    fast = speeds[int(0.75 * (len(speeds) - 1))] if len(speeds) >= 8 else None
 
     def who(side, rally=None):
         return "me" if side == me_by_rally.get(rally, me_default) else "opponent"
@@ -64,20 +92,30 @@ def save_session(con, info, shots, meta: dict) -> int:
         winner, reason = None, None
         if last.outcome == "winner":
             winner, reason = who(last.hitter, rally), "winner"
-        elif last.outcome.startswith("error"):
+        elif last.outcome == "fault" and len(rs) == 1:
+            winner, reason = None, "fault"       # first or second serve: decided in metrics.py
+        elif last.outcome.startswith("error") or last.outcome == "fault":
             winner = "opponent" if who(last.hitter, rally) == "me" else "me"
-            reason = "unforced_error"            # forced vs unforced needs Phase 4
+            reason = "forced_error" if _forced(rs, fast) else "unforced_error"
         last_frame = last.bounce_frame or last.frame
-        con.execute("INSERT INTO points VALUES (?,?,?,?,?,?,?,?,?)",
-                    [pid, sid, rally, rs[0].frame, last_frame, who(rs[0].hitter, rally), len(rs), winner, reason])
+        mv = movement.get(rally, {})
+        con.execute("INSERT INTO points (point_id, session_id, seq, start_frame, end_frame, server, rally_length, winner, "
+                    "end_reason, me_distance_m, me_behind_baseline_m, seconds) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    [pid, sid, rally, rs[0].frame, last_frame, who(rs[0].hitter, rally), len(rs), winner, reason,
+                     mv.get("distance_m"), mv.get("behind_baseline_m"), (last_frame - rs[0].frame) / fps])
 
     for s in shots:
         shid = _next_id(con, "shots", "shot_id")
         c, b = s.contact_xy_m or (None, None), s.bounce_xy_m or (None, None)
+        fl = getattr(s, "flight", None)
+        fv = (fl.net_clearance_m, fl.apex_m, None if fl.spin_rpm != fl.spin_rpm else fl.spin_rpm,
+              fl.bounce_angle_deg, fl.hit_height_m, fl.fit_px) if fl is not None else (None,) * 6
         con.execute(
-            "INSERT INTO shots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [shid, sid, point_ids[s.rally], s.seq, s.frame, s.frame / info.fps, who(s.hitter, s.rally), s.stroke,
-             c[0], c[1], b[0], b[1], s.in_court, s.speed_kmh, s.direction, s.depth, s.outcome, s.confidence],
+            "INSERT INTO shots (shot_id, session_id, point_id, seq, frame, t_s, hitter, stroke, contact_x_m, contact_y_m, "
+            "bounce_x_m, bounce_y_m, in_court, speed_kmh, direction, depth, outcome, confidence, net_clearance_m, apex_m, "
+            "spin_rpm, bounce_angle_deg, hit_height_m, flight_fit_px) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [shid, sid, point_ids[s.rally], s.seq, s.frame, s.frame / fps, who(s.hitter, s.rally), s.stroke,
+             c[0], c[1], b[0], b[1], s.in_court, s.speed_kmh, s.direction, s.depth, s.outcome, s.confidence, *fv],
         )
         t = technique.get(s.frame)
         if t is not None and t.pose_frames >= 5:

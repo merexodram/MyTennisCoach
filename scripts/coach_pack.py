@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from mytenniscoach import db, technique, video  # noqa: E402
+from mytenniscoach import db, metrics, technique, video  # noqa: E402
 
 OUT = ROOT / "outputs" / "coach"
 CACHE = ROOT / "outputs" / "cache"
@@ -121,7 +121,25 @@ def main() -> None:
     except Exception:
         notes = {"note": session["notes"]}
 
+    metrics.store(con, sid)
+    _, mvals = metrics.table(con, include_reference=True)
+    own = {k: v for k, v in mvals.items() if k in {s[0] for s in con.execute(
+        "SELECT session_id FROM sessions WHERE kind <> 'reference'").fetchall()}}
+    earlier = [k for k in sorted(own) if k < sid]
+    metric_rows = []
+    for m in metrics.METRICS:
+        d = mvals.get(sid, {}).get(m.key)
+        if d is None:
+            continue
+        prev = own.get(earlier[-1], {}).get(m.key) if earlier else None
+        b = metrics.best({k: v for k, v in own.items() if k != sid}, m.key)
+        metric_rows.append({"group": m.group, "metric": m.key, "label": m.label, "value": round(d[0], 2), "n": d[1],
+                            "enough": d[2] == "coach" or (d[1] or 0) >= m.min_n, "source": d[2],
+                            "how": m.how, "better": m.better,
+                            "previous": None if prev is None else round(prev[0], 2),
+                            "best_before": None if b is None else round(b[1], 2)})
     pack = {
+        "metrics": metric_rows,
         "session": {k: (str(v) if k == "played_on" else v) for k, v in session.items() if k != "notes"},
         "quality": notes.get("quality", {}),
         "note": notes.get("note"),
@@ -188,6 +206,13 @@ def main() -> None:
           "", "## How much the tracking saw", "",
           "Read every number below with this in mind.", ""]
     md += [f"- {k.replace('_', ' ')}: {v}" for k, v in q.items()] or ["- not recorded for this session"]
+    md += ["", "## Session metrics", "",
+           "enough = the value rests on enough strokes to compare; how = auto / estimate (one camera) / coach.", "",
+           md_table([{k: r[k] for k in ("group", "label", "value", "previous", "best_before", "n", "enough", "how")}
+                     for r in pack["metrics"]])]
+    missing = [m.key for m in metrics.METRICS if m.how == "coach" and m.key not in {r["metric"] for r in pack["metrics"]}]
+    md += ["", "## Not measurable from the video: ask in the review chat", "",
+           ", ".join(missing) + " (write answers to coach_input.json)", ""]
     for title, key in (("Rallies", "rallies"), ("My strokes", "my_strokes"), ("Opponent's strokes", "opponent_strokes"),
                        ("My technique by stroke (pose)", "my_technique"), ("Where I hit from", "my_contact_positions"),
                        ("My errors", "my_errors"), ("Clips kept", "clips"), ("Picture strips", "picture_strips"),
