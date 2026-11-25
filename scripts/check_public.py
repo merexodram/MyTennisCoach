@@ -31,7 +31,7 @@ TERMS = ROOT / "data" / "private_terms.txt"
 LOCAL_ONLY = re.compile(
     r"(^|/)(data|outputs|models|_to_delete)/"
     r"|\.(mp4|mov|avi|mkv|m4v|webm|lrv|thm|insv|insp|360|jpe?g|png|heic|gif|duckdb|wal|pkl|pt|pth|onnx|bundle"
-    r"|pem|key|p12|env)$"
+    r"|pem|key|p12|env|7z|zip|rar|tar|tgz|gz|ds_store)$"
     r"|(^|/)(player\.json|coach_input\.json|review\.md|pack\.md|pack\.json|links\.txt|\.env)$"
     r"|\.court\.json$|_log\.txt$|(^|/)(cookies|client_secret|credentials|token|service_account)[^/]*$",
     re.IGNORECASE)
