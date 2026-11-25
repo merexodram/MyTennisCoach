@@ -439,8 +439,24 @@ def main() -> None:
             except Exception as e:
                 id_pose = None
                 print(f"Pose model not available for telling the players apart ({e}); using clothing histograms")
-            ref = identity.reference(path, tr["boxes"], click[0], click[1], chosen=chosen, pose=id_pose)
+            try:
+                id_det = players.PlayerFinder(device, imgsz=1280)
+            except Exception:
+                id_det = None
+            fixed = tr.get("Hs", [None])
+            H_click = next((h for h in fixed[max(0, click[0] - 300): click[0] + 300] if h is not None), None)
+            if H_click is None:
+                H_click = next((h for h in fixed if h is not None), None)
+            ref = identity.reference(path, tr["boxes"], click[0], click[1], chosen=chosen, pose=id_pose,
+                                     detector=id_det, H=H_click)
+            if ref is not None and "dir" in ref:
+                print(f"Me: shorts colour (a*, b*) {np.round(ref['me_colour'], 1).tolist()}, "
+                      f"opponent {np.round(ref['other_colour'], 1).tolist()}")
             sides = identity.me_sides(path, chosen, shots, ref, info.fps, pose=id_pose)
+            axis = sides.pop("_axis", None)
+            if axis is not None:
+                print(f"Me: colour axis {np.round(axis['D'], 2).tolist()}, separation {axis['separation']:.1f} "
+                      "(above about 3: the two players are clearly told apart)")
             me_by_rally = {r: v["side"] for r, v in sides.items()}
             for r in rallies:                              # rallies without a usable picture: follow the previous one
                 if r not in me_by_rally:

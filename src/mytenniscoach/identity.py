@@ -80,51 +80,78 @@ def similarity(a: np.ndarray | None, b: np.ndarray | None) -> float:
     return float(np.sqrt(a * b).sum())                 # Bhattacharyya coefficient
 
 
-def reference(path, boxes_per_frame: list, frame_index: int, point, chosen: list | None = None, pose=None):
+def reference(path, boxes_per_frame: list, frame_index: int, point, chosen: list | None = None, pose=None,
+              detector=None, H=None):
     """What "me" looks like, from the click at `point` in frame `frame_index`.
 
     Returns a dict: "hist" (clothing histogram) and, with a pose model and the
     opponent visible in the same frame, "dir" (my shorts colour minus the
     opponent's, the direction that tells us apart). None if nothing is found.
+
+    The click may fall between rallies, where the tracks hold no players, so
+    the people in the clicked frame itself are detected when a detector is given.
     """
     reader = video.Reader(path)
     frames = reader.read(frame_index, 1)
     reader.close()
     if not frames:
         return None
+    frame = frames[0]
     px, py = point
-    best, best_area, at = None, float("inf"), frame_index
-    # The tracks may not include this exact frame: look at neighbouring frames too.
-    for f in sorted(range(len(boxes_per_frame)), key=lambda g: abs(g - frame_index))[:31]:
-        for b in boxes_per_frame[f]:
-            if b[0] <= px <= b[2] and b[1] <= py <= b[3]:
-                area = (b[2] - b[0]) * (b[3] - b[1])
-                if area < best_area:
-                    best, best_area, at = b, area, f
-        if best is not None:
-            break
+
+    def contains(b):
+        return b[0] <= px <= b[2] and b[1] <= py <= b[3]
+
+    def area(b):
+        return (b[2] - b[0]) * (b[3] - b[1])
+
+    best, other = None, None
+    if detector is not None:
+        found = [b for b in detector.people_batch([frame])[0]]
+        if H is not None:                              # only people standing on or around the court
+            from . import court as _court
+            keep = []
+            for b in found:
+                x, y = _court.to_court(H, [((b[0] + b[2]) / 2, b[3])])[0]
+                if abs(x) < 8.0 and abs(y) < 18.0:
+                    keep.append((b, y))
+        else:
+            keep = [(b, 0.0) for b in found]
+        mine = [k for k in keep if contains(k[0])]
+        if not mine and keep:                          # a click just beside the box: nearest person
+            d = [np.hypot((k[0][0] + k[0][2]) / 2 - px, (k[0][1] + k[0][3]) / 2 - py) for k in keep]
+            j = int(np.argmin(d))
+            if d[j] < 1.5 * (keep[j][0][2] - keep[j][0][0]) + 20:
+                mine = [keep[j]]
+        if mine:
+            me_b, me_y = min(mine, key=lambda k: area(k[0]))
+            best = me_b
+            rest = [k for k in keep if k[0] is not me_b]
+            opposite = [k for k in rest if np.sign(k[1]) != np.sign(me_y)] if H is not None else []
+            pool = opposite or rest
+            if pool:
+                other = max(pool, key=lambda k: area(k[0]))[0]
+    if best is None:
+        # The tracks around the clicked frame.
+        for f in sorted(range(len(boxes_per_frame)), key=lambda g: abs(g - frame_index))[:31]:
+            hits = [b for b in boxes_per_frame[f] if contains(b)]
+            if hits:
+                best = min(hits, key=area)
+                break
     if best is None:                                   # no detection there: use a box around the click
         best = (px - 30, py - 60, px + 30, py + 60)
-    ref = {"hist": clothing(frames[0], best)}
-    if pose is not None and chosen is not None:
-        # The opponent: the selected player on the other side in that frame.
-        other = None
-        for f in sorted(range(len(chosen)), key=lambda g: abs(g - frame_index))[:61]:
-            for side in ("near", "far"):
-                p = chosen[f].get(side)
-                if p is None:
-                    continue
-                b = p[0]
-                inside = b[0] <= px <= b[2] and b[1] <= py <= b[3]
-                if not inside:
-                    other = b
-            if other is not None:
-                break
-        mine = shorts_colour(frames[0], best, pose)
-        theirs = shorts_colour(frames[0], other, pose) if other is not None else None
-        if mine is not None and theirs is not None and np.linalg.norm(mine - theirs) > 2.0:
-            ref["dir"] = (mine - theirs).astype(np.float32)
-            ref["me_colour"], ref["other_colour"] = mine, theirs
+    if other is None and chosen is not None and 0 <= frame_index < len(chosen):
+        for side in ("near", "far"):
+            p = chosen[frame_index].get(side)
+            if p is not None and not contains(p[0]):
+                other = p[0]
+    ref = {"hist": clothing(frame, best)}
+    if pose is not None and other is not None:
+        mine_c = shorts_colour(frame, best, pose)
+        theirs = shorts_colour(frame, other, pose)
+        if mine_c is not None and theirs is not None and np.linalg.norm(mine_c - theirs) > 2.0:
+            ref["dir"] = (mine_c - theirs).astype(np.float32)
+            ref["me_colour"], ref["other_colour"] = mine_c, theirs
     return ref if ref["hist"] is not None or "dir" in ref else None
 
 
@@ -156,23 +183,44 @@ def me_sides(path, chosen: list, shots: list, ref, fps: float, samples: int = 6,
                 cn, cf = shorts_colour(got[0], pn[0], pose), shorts_colour(got[0], pf[0], pose)
                 if cn is None or cf is None:
                     continue
-                votes.append(float(np.dot(cn - cf, ref["dir"])))
+                votes.append(cn - cf)
             else:
                 if pn is not None:
                     near_s.append(similarity(ref["hist"], clothing(got[0], pn[0])))
                 if pf is not None:
                     far_s.append(similarity(ref["hist"], clothing(got[0], pf[0])))
         if use_dir and votes:
-            v = float(np.median(votes))
-            raw[rally] = {"side": "near" if v > 0 else "far", "near": max(v, 0.0), "far": max(-v, 0.0),
-                          "score": v, "n": len(votes)}
+            raw[rally] = {"vec": np.median(np.array(votes), axis=0), "n": len(votes)}
         elif near_s or far_s:
             near = float(np.mean(near_s)) if near_s else 0.0
             far = float(np.mean(far_s)) if far_s else 0.0
             raw[rally] = {"side": "near" if near >= far else "far", "near": near, "far": far,
                           "score": near - far, "n": len(near_s) + len(far_s)}
     reader.close()
-    return _smooth(raw)
+    if use_dir:
+        vecs = [r["vec"] for r in raw.values() if "vec" in r]
+        if vecs:
+            # Near-minus-far colour per rally is +D or -D, D = my shorts minus the
+            # opponent's. Its main axis over the whole match is D; the clicked
+            # frame only decides the sign.
+            V = np.array(vecs, dtype=np.float64)
+            w, U = np.linalg.eigh(V.T @ V)
+            D = U[:, int(np.argmax(w))]
+            if float(np.dot(D, ref["dir"])) < 0:
+                D = -D
+            for k, r in raw.items():
+                if "vec" in r:
+                    v = float(np.dot(r.pop("vec"), D))
+                    r.update({"side": "near" if v > 0 else "far", "near": max(v, 0.0), "far": max(-v, 0.0),
+                              "score": v})
+            raw = {k: r for k, r in raw.items() if "score" in r}
+            ratio = float(w.max() / max(w.min(), 1e-9))
+            raw["_axis"] = {"D": D.tolist(), "separation": ratio}
+    axis = raw.pop("_axis", None)
+    out = _smooth(raw)
+    if axis is not None:
+        out["_axis"] = axis
+    return out
 
 
 def _smooth(raw: dict) -> dict:
