@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import activity, ball, clips, court, db, events, flight, identity, players, proxy, render, technique, video
+from . import activity, ball, gpu, clips, court, db, events, flight, identity, players, proxy, render, technique, video
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "outputs"
@@ -24,10 +24,7 @@ CACHE = OUT / "cache"
 
 
 def pick_device(name: str) -> str:
-    if name != "auto":
-        return name
-    import torch
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    return gpu.pick(name)
 
 
 def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkpoint: Path | None = None,
@@ -42,7 +39,7 @@ def track(path: Path, device: str, court_every_s: float = 0.2, log=print, checkp
     info = video.probe(path)
     n = info.frames
     step = max(1, int(round(info.fps * court_every_s)))
-    batch = batch or (8 if device.startswith("cuda") else 2)
+    batch = batch or (8 if device.startswith("cuda") else 4 if device.startswith("mps") else 2)
     if device.startswith("cuda"):
         import torch
         torch.backends.cudnn.benchmark = True              # fixed input sizes: let cuDNN pick its fastest method
@@ -252,14 +249,14 @@ def main() -> None:
     player = load_player()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("video")
-    ap.add_argument("--device", default="auto", help="auto | cuda | cpu")
+    ap.add_argument("--device", default="auto", help="auto | cuda | mps | cpu (auto: NVIDIA GPU, then Apple GPU, then CPU)")
     ap.add_argument("--db", default=str(db.DEFAULT_DB))
     ap.add_argument("--near-hand", default="right", choices=["right", "left"])
     ap.add_argument("--far-hand", default="right", choices=["right", "left"])
     ap.add_argument("--doubles", action="store_true",
                     help="doubles match: the outer side lines count (default: singles, inner side lines)")
     ap.add_argument("--me", default="auto", choices=["auto", "near", "far"],
-                    help="which player is 'me': auto = the one clicked in calibrate.bat, found again in every "
+                    help="which player is 'me': auto = the one clicked in calibrate.bat or calibrate.command, found again in every "
                          "rally by clothing colour (near if nobody was clicked)")
     ap.add_argument("--hand", default=player.get("hand", "right"), choices=["right", "left"], help="my playing hand")
     ap.add_argument("--height", type=float, default=player.get("height_cm", 178.0), help="my height in cm (scales the pose)")
@@ -287,7 +284,7 @@ def main() -> None:
                     help="annotated video of the whole recording, not only the stretches with play")
     ap.add_argument("--no-proxy", action="store_true", help="analyse the original file, not a working copy")
     ap.add_argument("--court-file", default=None,
-                    help="court points clicked with calibrate.bat (default: <video name>.court.json next to the video)")
+                    help="court points clicked with calibrate.bat or calibrate.command (default: <video name>.court.json next to the video)")
     ap.add_argument("--far-zoom", default="auto", choices=["auto", "on", "off"],
                     help="track the far half a second time, enlarged (auto: only for a low calibrated camera)")
     ap.add_argument("--court-every", type=float, default=0.2,
@@ -316,7 +313,7 @@ def main() -> None:
         if cal is not None and cal.exists():
             shutil.copyfile(cal, dest / f"{name}.court.json")
         else:
-            print("No court file yet: drag the video onto calibrate.bat first if the camera was your own.")
+            print("No court file yet: run calibrate.bat or calibrate.command on the video first if the camera was your own.")
         print(f"Ready for upload: {dest}")
         return
 
@@ -335,7 +332,7 @@ def main() -> None:
                    far_zoom=args.far_zoom)
         if fixed_H is None and not any(H is not None for H in tr["Hs"]):
             print("The court was not recognised in any frame. For a fixed camera, mark it by hand once:\n"
-                  f"  drag the video onto calibrate.bat, then analyse again.")
+                  f"  run calibrate.bat or calibrate.command on the video, then analyse again.")
         cache.write_bytes(pickle.dumps(tr))
     if args.track_only:
         print(f"Tracks saved: {cache}")
@@ -379,7 +376,7 @@ def main() -> None:
         click = court.load_me(cal, info.width, info.height, info.fps) if cal is not None and cal.exists() else None
         if click is None:
             me_by_rally = {r: "near" for r in rallies}
-            print("Me: the near player (nobody was clicked in calibrate.bat, so ends are not followed)")
+            print("Me: the near player (nobody was clicked in calibrate.bat or calibrate.command, so ends are not followed)")
         else:
             ref = identity.reference(path, tr["boxes"], click[0], click[1])
             sides = identity.me_sides(path, chosen, shots, ref, info.fps)
@@ -452,7 +449,8 @@ def main() -> None:
             print(f"Metrics skipped: {e}")
         if not args.no_clips and not is_copy:
             n_clips = clips.cut(con, sid, original)
-            print(f"Clips kept: {n_clips} (data\\clips\\session_{sid:04d})")
+            clip_dir = Path("data") / "clips" / f"session_{sid:04d}"
+            print(f"Clips kept: {n_clips} ({clip_dir})")
         con.close()
 
     if not args.no_video:

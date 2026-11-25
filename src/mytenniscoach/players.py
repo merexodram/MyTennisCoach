@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import court
+from . import court, gpu
 
 BEHIND_BASELINE_M = 9.0     # how far behind the baseline a player may stand
 BESIDE_COURT_M = 4.0        # how far outside the doubles line
@@ -40,8 +40,10 @@ class PlayerFinder:
                 results += self.model.predict(frames[k: k + self.batch], classes=[0], conf=0.25, imgsz=self.imgsz,
                                               device=self.device, verbose=False)
                 k += self.batch
-            except torch.OutOfMemoryError:
-                torch.cuda.empty_cache()
+            except Exception as err:
+                if not gpu.is_oom(err):
+                    raise
+                gpu.free(self.device)
                 if self.batch == 1:
                     raise
                 self.batch = max(1, self.batch // 2)

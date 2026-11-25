@@ -89,7 +89,11 @@ def main() -> None:
     cfg = ROOT / "data" / "player.json"
     target = json.loads(cfg.read_text(encoding="utf-8")).get("obsidian_file") if cfg.exists() else None
     if target:
-        t = Path(target)
+        import glob
+        import os
+        pattern = os.path.expanduser(target)
+        hits = sorted(glob.glob(pattern)) if any(c in pattern for c in "*?[") else [pattern]
+        t = Path(hits[0]) if hits else Path(pattern)
         if t.exists():
             with t.open("a", encoding="utf-8") as fh:
                 fh.write(f"\n\n---\n\n{text}\n")

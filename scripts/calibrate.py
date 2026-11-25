@@ -20,7 +20,7 @@ every rally. Wear something different from your opponent.
     Esc        quit without saving
 
 The result is saved next to the video as <name>.court.json and used
-automatically by analyze.bat.
+automatically by analyze.bat or analyze.command.
 
 A magnifier in a corner shows the spot under the mouse four times enlarged.
 A click on a near-half point is moved onto the real crossing of the two

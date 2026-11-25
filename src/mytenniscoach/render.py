@@ -28,10 +28,14 @@ def _mini(shape, scale=7.0, margin=22):
 
 
 def find_ffmpeg() -> str | None:
-    """ffmpeg on PATH, or where winget puts it (PATH is stale until a new login)."""
+    """ffmpeg on PATH, where Homebrew puts it on a Mac, or where winget puts it on
+    Windows (PATH can be stale until a new login)."""
     exe = shutil.which("ffmpeg")
     if exe:
         return exe
+    for p in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+        if os.path.exists(p):
+            return p
     local = os.environ.get("LOCALAPPDATA")
     if local:
         hits = glob.glob(os.path.join(local, "Microsoft", "WinGet", "Packages", "Gyan.FFmpeg*", "**", "bin", "ffmpeg.exe"),

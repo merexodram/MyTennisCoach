@@ -37,7 +37,19 @@ def out_dir() -> Path:
         d = json.loads(cfg.read_text(encoding="utf-8")).get("obsidian_dir") if cfg.exists() else None
     except Exception:
         d = None
-    return Path(d) if d else ROOT / "outputs" / "obsidian" / "Tennis"
+    if d:
+        # "~" and wildcards are allowed, e.g. the Google Drive folder on a Mac:
+        # ~/Library/CloudStorage/GoogleDrive-*/My Drive/<vault>/Tennis
+        import glob
+        import os
+        pattern = os.path.expanduser(d)
+        parent, leaf = os.path.split(pattern.rstrip("/\\"))
+        parents = sorted(glob.glob(parent)) if any(c in parent for c in "*?[") else [parent]
+        parents = [q for q in parents if Path(q).is_dir()]
+        if parents:
+            return Path(parents[0]) / leaf
+        print(f"Obsidian folder {d} not found (is Google Drive running?); writing to outputs/obsidian/Tennis instead.")
+    return ROOT / "outputs" / "obsidian" / "Tennis"
 
 
 def fmt(key, v) -> str:

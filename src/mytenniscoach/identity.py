@@ -1,6 +1,6 @@
 """Which of the two players is "me".
 
-The user clicks on themself once (calibrate.bat). The colours of their
+The user clicks on themself once (calibrate.bat or calibrate.command). The colours of their
 clothing at that moment become the reference. Players change ends during a
 match, so for every rally the near and the far player are both compared with
 the reference, and the closer match is "me" for that rally.

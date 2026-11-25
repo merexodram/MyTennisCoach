@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import torch
 
-from . import upstream
+from . import gpu, upstream
 
 NET_W, NET_H = 640, 360
 
@@ -58,8 +58,10 @@ class BallTracker:
             part = stacks[done: done + self.max_batch]
             try:
                 heat_all = self._run(part)
-            except torch.OutOfMemoryError:
-                torch.cuda.empty_cache()
+            except Exception as err:
+                if not gpu.is_oom(err):
+                    raise
+                gpu.free(self.device)
                 if self.max_batch == 1:
                     raise
                 self.max_batch = max(1, self.max_batch // 2)
@@ -74,7 +76,7 @@ class BallTracker:
         return out
 
     def _run(self, stacks: list[np.ndarray]) -> np.ndarray:
-        inp = torch.from_numpy(np.stack(stacks).transpose(0, 3, 1, 2)).to(self.device)
+        inp = torch.from_numpy(np.ascontiguousarray(np.stack(stacks).transpose(0, 3, 1, 2), dtype=np.float32)).to(self.device)
         if self.half_state == "on":
             return self._heat(self.model_half, inp.half())
         heat_all = self._heat(self.model, inp.float())
@@ -97,8 +99,7 @@ class BallTracker:
             agree = (a & b).sum() / max(1, (a | b).sum())
         except Exception:                          # includes running out of GPU memory
             candidate, agree = None, 0.0
-            if self.device.startswith("cuda"):
-                torch.cuda.empty_cache()
+            gpu.free(self.device)
         if agree > 0.8:
             self.model_half, self.half_state = candidate, "on"
             self.max_batch *= 2                    # half precision needs half the memory

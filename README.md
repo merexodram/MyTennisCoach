@@ -66,6 +66,17 @@ to process it, and see [docs/PIPELINE.md](docs/PIPELINE.md) for options and
 `scripts/report.py` for statistics.
 Full prerequisites are in [docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md).
 
+## Quick start (Mac with Apple Silicon)
+
+```bash
+git clone --recurse-submodules --shallow-submodules https://github.com/merexodram/MyTennisCoach.git
+```
+
+Then double-click `setup.command` (needs [Homebrew](https://brew.sh)). Every
+`.bat` launcher has a `.command` twin that asks for the video in a Finder
+window instead of drag and drop. The networks run on the Mac's GPU (Metal).
+See [docs/SETUP_MAC.md](docs/SETUP_MAC.md).
+
 ## Privacy
 
 This repository is public, so it holds code and documentation only. Footage,
@@ -84,6 +95,7 @@ every push (`.github/workflows/privacy.yml`).
 docs/            setup, validation protocol, upstream credits
 scripts/         setup, weights download, clip fetch, statistics report, baseline run
 setup.bat        one-click install         analyze.bat   drag a video onto it
+*.command        the same launchers for macOS (double-click; docs/SETUP_MAC.md)
 download.bat     download the links in data\links.txt (yt-dlp, up to 1080p)
 calibrate.bat    own camera: click the court points and yourself, once per camera position
 prepare_colab.bat  get a recording ready for tracking on a free Colab GPU (docs/COLAB.md)

@@ -2,7 +2,7 @@
 
     python scripts/update_stats.py [--compare A B]
 
-coach.bat runs this last, so the notes always match the database.
+coach.bat (coach.command on a Mac) runs this last, so the notes always match the database.
 """
 import argparse
 import subprocess
