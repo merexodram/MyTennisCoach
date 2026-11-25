@@ -236,6 +236,57 @@ def movement(chosen: list, shots: list, me_by_rally: dict, fps: float) -> dict:
     return out
 
 
+def join_parts(parts: list[Path], log=print) -> Path:
+    """One recording split by the camera into several files -> one file, without
+    re-encoding (ffmpeg stream copy). VID_..._001.mp4 + VID_..._002.mp4 -> VID_....mp4"""
+    import re
+    import subprocess
+    if len(parts) == 1:
+        return parts[0]
+    parts = sorted(parts)
+    stem = re.sub(r"[_-]?\d{1,3}$", "", parts[0].stem) or parts[0].stem + "_joined"
+    out = parts[0].with_name(stem + parts[0].suffix)
+    total = sum(p.stat().st_size for p in parts)
+    if out.exists() and out.stat().st_size > 0.9 * total:
+        log(f"Using the joined recording {out.name}")
+        return out
+    ffmpeg = render.find_ffmpeg()
+    if ffmpeg is None:
+        raise SystemExit("ffmpeg is needed to join the recording's parts.")
+    lst = out.with_suffix(".parts.txt")
+    lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts), encoding="utf-8")
+    log(f"Joining {len(parts)} parts into {out.name} (no re-encoding) ...")
+    tmp = out.with_suffix(".part" + out.suffix)
+    code = subprocess.call([ffmpeg, "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+                            "-c", "copy", "-map", "0", "-movflags", "+faststart", str(tmp)])
+    if code != 0 or not tmp.exists():
+        raise SystemExit("Joining the parts failed.")
+    tmp.replace(out)
+    lst.unlink(missing_ok=True)
+    return out
+
+
+def recording_date(path: Path) -> str | None:
+    """The day it was filmed: from the file name (VID_20261113_...), else the
+    recording's own creation time."""
+    import re
+    import subprocess
+    m = re.search(r"(20\d{2})(\d{2})(\d{2})", path.stem)
+    if m:
+        y, mo, d = map(int, m.groups())
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+    ffprobe = (render.find_ffmpeg() or "").replace("ffmpeg", "ffprobe")
+    try:
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format_tags=creation_time",
+                              "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True, timeout=30).stdout
+        if out[:10].count("-") == 2:
+            return out[:10]
+    except Exception:
+        pass
+    return None
+
+
 def load_player() -> dict:
     """data/player.json: who "me" is, so it need not be typed every time."""
     f = ROOT / "data" / "player.json"
@@ -248,7 +299,8 @@ def load_player() -> dict:
 def main() -> None:
     player = load_player()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("video")
+    ap.add_argument("video", nargs="+",
+                    help="the recording; several files (a camera that splits long recordings) are joined into one")
     ap.add_argument("--device", default="auto", help="auto | cuda | mps | cpu (auto: NVIDIA GPU, then Apple GPU, then CPU)")
     ap.add_argument("--db", default=str(db.DEFAULT_DB))
     ap.add_argument("--near-hand", default="right", choices=["right", "left"])
@@ -291,7 +343,7 @@ def main() -> None:
                     help="seconds between court detections (use 2 or more for a fixed camera)")
     args = ap.parse_args()
 
-    original = Path(args.video).resolve()
+    original = join_parts([Path(v).resolve() for v in args.video])
     CACHE.mkdir(parents=True, exist_ok=True)
     # A working copy handed in directly (cloud run) keeps the name of its recording.
     is_copy = original.stem.endswith("_work")
@@ -301,6 +353,10 @@ def main() -> None:
     path = original if (args.no_proxy or is_copy) else proxy.make(original, CACHE / f"{name}_work.mp4")
     info = video.probe(path)
     cal = Path(args.court_file) if args.court_file else court.find_calibration(original.with_name(name + original.suffix))
+    if (cal is None or not cal.exists()) and len(args.video) > 1 and not args.court_file:
+        first = Path(sorted(args.video)[0]).resolve()          # clicked on the first part of the recording
+        alt = court.find_calibration(first)
+        cal = alt if alt is not None and alt.exists() else cal
 
     if args.prepare:
         import shutil
@@ -317,11 +373,11 @@ def main() -> None:
         print(f"Ready for upload: {dest}")
         return
 
+    device = pick_device(args.device)
     if cache.exists() and not args.redo:
         print(f"Using cached tracks: {cache.name}")
         tr = pickle.loads(cache.read_bytes())
     else:
-        device = pick_device(args.device)
         print(f"Tracking {path.name}: {info.frames} frames, {info.width}x{info.height} @ {info.fps:.0f} fps on {device}")
         fixed_H = None
         if cal is not None and cal.exists():
@@ -378,13 +434,23 @@ def main() -> None:
             me_by_rally = {r: "near" for r in rallies}
             print("Me: the near player (nobody was clicked in calibrate.bat or calibrate.command, so ends are not followed)")
         else:
-            ref = identity.reference(path, tr["boxes"], click[0], click[1])
-            sides = identity.me_sides(path, chosen, shots, ref, info.fps)
+            try:
+                id_pose = technique.PoseEstimator(device, imgsz=320)
+            except Exception as e:
+                id_pose = None
+                print(f"Pose model not available for telling the players apart ({e}); using clothing histograms")
+            ref = identity.reference(path, tr["boxes"], click[0], click[1], chosen=chosen, pose=id_pose)
+            sides = identity.me_sides(path, chosen, shots, ref, info.fps, pose=id_pose)
             me_by_rally = {r: v["side"] for r, v in sides.items()}
+            for r in rallies:                              # rallies without a usable picture: follow the previous one
+                if r not in me_by_rally:
+                    prev = [me_by_rally[q] for q in sorted(me_by_rally) if q < r]
+                    me_by_rally[r] = prev[-1] if prev else "near"
             n_far = sum(v == "far" for v in me_by_rally.values())
-            unsure = sum(abs(v["near"] - v["far"]) < 0.1 for v in sides.values())
-            print(f"Me: found by clothing colour; near in {len(me_by_rally) - n_far} rallies, far in {n_far}"
-                  + (f"; {unsure} rallies were a close call" if unsure else ""))
+            unsure = sum(not v.get("sure", True) for v in sides.values())
+            how = "shorts colour" if ref is not None and "dir" in ref else "clothing colour"
+            print(f"Me: found by {how}; near in {len(me_by_rally) - n_far} rallies, far in {n_far}"
+                  + (f"; {unsure} rallies were a close call and follow their neighbours" if unsure else ""))
 
     # Technique: pose of my strokes only.
     tech: dict = {}
@@ -418,7 +484,7 @@ def main() -> None:
     played_on = args.date
     if played_on is None:
         import datetime as _dt
-        played_on = _dt.date.fromtimestamp(original.stat().st_mtime).isoformat()
+        played_on = recording_date(original) or _dt.date.fromtimestamp(original.stat().st_mtime).isoformat()
     try:
         moves = movement(chosen, shots, me_by_rally, info.fps)
     except Exception as e:

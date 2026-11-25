@@ -38,7 +38,13 @@ Terminal in the project folder.
 | `download.bat` | `download.command` | download the links in `data/links.txt` |
 
 The Mac launchers open a Finder window to choose the video (drag and drop on
-a `.command` file does not pass the file). From Terminal, options work as on
+a `.command` file does not pass the file). A camera that splits a long
+recording into parts (`VID_..._001.mp4`, `VID_..._002.mp4`): select all parts
+together; they are joined into one file without re-encoding
+(`VID_....mp4`, delete the parts afterwards if you like). The working copy is
+made with the Mac's hardware video encoder; 4K at 120 fps becomes 1080p at
+30 fps. The date of the session is read from the file name or the
+recording's own creation time, not from when the file was copied. From Terminal, options work as on
 Windows: `./analyze.command recording.mp4 --doubles`.
 
 ## Settings

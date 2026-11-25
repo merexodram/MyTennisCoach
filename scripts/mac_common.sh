@@ -24,15 +24,29 @@ finish() {
   exit "${1:-0}"
 }
 
-# A video from the command line, or picked in a Finder window.
+# Videos from the command line, or picked in a Finder window (several parts of one
+# recording can be selected together). Sets VIDEOS (array) and VIDEO (the first).
 pick_video() {
-  if [ -n "$1" ] && [ -f "$1" ]; then
-    VIDEO="$1"
-    return 0
+  VIDEOS=()
+  while [ -n "$1" ] && [ -f "$1" ]; do VIDEOS+=("$1"); shift; done
+  if [ ${#VIDEOS[@]} -eq 0 ]; then
+    local picked
+    picked="$(osascript \
+      -e 'set fs to choose file with prompt "Choose the video (a recording split into parts: select all parts)" of type {"public.movie"} with multiple selections allowed' \
+      -e 'set out to ""' -e 'repeat with f in fs' -e 'set out to out & POSIX path of f & linefeed' -e 'end repeat' \
+      -e 'return out' 2>/dev/null)"
+    while IFS= read -r line; do [ -n "$line" ] && VIDEOS+=("$line"); done <<< "$picked"
   fi
-  VIDEO="$(osascript -e 'POSIX path of (choose file with prompt "Choose the video" of type {"public.movie"})' 2>/dev/null)"
-  if [ -z "$VIDEO" ]; then
+  if [ ${#VIDEOS[@]} -eq 0 ]; then
     echo "No video chosen."
     finish 1
   fi
+  VIDEO="${VIDEOS[0]}"
+}
+
+# How many leading arguments were video files (to shift them away).
+count_videos() {
+  local n=0
+  while [ -n "$1" ] && [ -f "$1" ]; do n=$((n + 1)); shift; done
+  echo $n
 }

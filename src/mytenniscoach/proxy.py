@@ -9,6 +9,7 @@ for cutting full-quality technique clips.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 from . import render, video
@@ -33,7 +34,9 @@ def make(path: Path, out: Path, log=print) -> Path:
     if ffmpeg is None:
         log("ffmpeg not found: analysing the original file directly (slower).")
         return path
-    fps = info.fps / 2.0 if info.fps > MAX_FPS else info.fps      # 60 -> 30, 50 -> 25
+    fps = info.fps
+    while fps > MAX_FPS:                                           # 60 -> 30, 50 -> 25, 120 -> 30
+        fps /= 2.0
     gop = max(1, int(round(fps)))
     vf = f"scale=-2:{min(MAX_HEIGHT, info.height)},fps={fps:g}"
     tmp = out.with_suffix(".part.mp4")
@@ -41,8 +44,15 @@ def make(path: Path, out: Path, log=print) -> Path:
             "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0", "-pix_fmt", "yuv420p", str(tmp)]
     log(f"Making a {min(MAX_HEIGHT, info.height)}p / {fps:g} fps working copy of {path.name} ...")
     # Hardware decoding first; fall back to software if the GPU cannot handle the format.
-    for pre in (["-hwaccel", "auto"], []):
-        if subprocess.call([ffmpeg, "-y", "-v", "error", *pre, *base]) == 0 and tmp.exists() and tmp.stat().st_size > 0:
+    # On a Mac the hardware encoder is several times faster than x264.
+    attempts = [(["-hwaccel", "auto"], base), ([], base)]
+    if sys.platform == "darwin":
+        vt = [x if x != "libx264" else "h264_videotoolbox" for x in base]
+        i = vt.index("-preset")
+        vt[i:i + 4] = ["-b:v", "12M"]                      # replaces -preset veryfast -crf 20
+        attempts.insert(0, (["-hwaccel", "videotoolbox"], vt))
+    for pre, args in attempts:
+        if subprocess.call([ffmpeg, "-y", "-v", "error", *pre, *args]) == 0 and tmp.exists() and tmp.stat().st_size > 0:
             tmp.replace(out)
             return out
     log("Could not make a working copy: analysing the original file directly (slower).")
