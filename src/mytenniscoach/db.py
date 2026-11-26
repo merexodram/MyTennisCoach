@@ -31,6 +31,27 @@ def pipeline_version() -> str:
         return "unknown"
 
 
+# What a recreational or professional ball can physically do. Beyond these the
+# tracking went wrong (two different balls joined, a ball thrown back between
+# points) and the value is dropped rather than averaged in.
+MAX_KMH = {"serve": 260.0}
+MAX_KMH_OTHER = 200.0
+MIN_KMH = 10.0
+BOUNCE_LIMIT_M = (12.0, 22.0)          # |x|, |y| from the net centre: well outside the court's surroundings
+
+
+def _sanitise(s) -> None:
+    v = s.speed_kmh
+    if v is not None and not (MIN_KMH <= v <= MAX_KMH.get(s.stroke, MAX_KMH_OTHER)):
+        s.speed_kmh = None
+    if s.bounce_xy_m is not None:
+        bx, by = s.bounce_xy_m
+        if abs(bx) > BOUNCE_LIMIT_M[0] or abs(by) > BOUNCE_LIMIT_M[1]:
+            s.bounce_xy_m, s.in_court = None, None
+            if str(s.outcome).startswith("error") or s.outcome == "fault":
+                s.outcome = "in_play"
+
+
 def _forced(rally_shots, fast_kmh) -> bool:
     """Was the last shot's error forced by the ball before it?
 
@@ -106,6 +127,7 @@ def save_session(con, info, shots, meta: dict) -> int:
 
     for s in shots:
         shid = _next_id(con, "shots", "shot_id")
+        _sanitise(s)
         c, b = s.contact_xy_m or (None, None), s.bounce_xy_m or (None, None)
         fl = getattr(s, "flight", None)
         fv = (fl.net_clearance_m, fl.apex_m, None if fl.spin_rpm != fl.spin_rpm else fl.spin_rpm,

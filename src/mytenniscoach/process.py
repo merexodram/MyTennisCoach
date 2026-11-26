@@ -529,8 +529,8 @@ def main() -> None:
             print(f"Metrics: {n_m} filled automatically")
         except Exception as e:
             print(f"Metrics skipped: {e}")
-        if not args.no_clips and not is_copy:
-            n_clips = clips.cut(con, sid, original)
+        if not args.no_clips:
+            n_clips = clips.cut(con, sid, original if not is_copy else path)   # clips are 1080p either way
             clip_dir = Path("data") / "clips" / f"session_{sid:04d}"
             print(f"Clips kept: {n_clips} ({clip_dir})")
         con.close()
